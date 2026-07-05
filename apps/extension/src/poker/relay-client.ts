@@ -113,9 +113,39 @@ export interface ClientHelloFields {
   timestampMillis?: number;
   nonce?: string;
   authScheme?: string;
+  // cosmos-signature-v1: compressed_pubkey(33) || r || s over
+  // sha256(buildClientHelloSigningPayload text) — see buildHelloSigningPayload.
+  authPayload?: Uint8Array;
   sessionId: string | number;
   relayId: string;
   playerSessionPubkey: string;
+}
+
+// The exact text the relay verifies for the cosmos-signature-v1 auth scheme
+// (relay_protocol.cpp buildClientHelloSigningPayload). timestampMillis and
+// nonce must therefore be fixed BEFORE signing and passed unchanged into the
+// hello fields.
+export function buildHelloSigningPayload(hello: {
+  chainId: string;
+  accountAddress: string;
+  networkAddress: string;
+  sessionId: string | number;
+  relayId: string;
+  playerSessionPubkey: string;
+  timestampMillis: number;
+  nonce: string;
+}): string {
+  return (
+    "bitpoker-relay-client-hello-v1\n" +
+    `${hello.chainId}\n` +
+    `${hello.accountAddress}\n` +
+    `${hello.networkAddress}\n` +
+    `${hello.sessionId}\n` +
+    `${hello.relayId}\n` +
+    `${hello.playerSessionPubkey}\n` +
+    `${hello.timestampMillis}\n` +
+    `${hello.nonce}`
+  );
 }
 
 export function encodeClientHello(hello: ClientHelloFields): Uint8Array {
@@ -134,7 +164,13 @@ export function encodeClientHello(hello: ClientHelloFields): Uint8Array {
     hello.nonce ?? Math.random().toString(36).slice(2) + Date.now().toString(36)
   );
   pushString(out, 8, hello.authScheme ?? "unsigned-dev");
-  // 9 auth_payload: unused on the unsigned-dev path.
+  if (hello.authPayload && hello.authPayload.length > 0) {
+    pushTag(out, 9, 2);
+    pushVarint(out, hello.authPayload.length);
+    for (const b of hello.authPayload) {
+      out.push(b);
+    }
+  }
   pushUint64(out, 10, hello.sessionId);
   pushString(out, 11, hello.relayId);
   pushString(out, 12, hello.playerSessionPubkey);

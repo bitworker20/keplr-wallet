@@ -6,9 +6,33 @@
 // Mirrors the flow proven by bitpoker/wasm/test/run_interop_peer.js, so this
 // controller is wire-compatible with a native GameSession peer over
 // poker-relayd.
-import { RelayClient, RelayType } from "./relay-client";
+import { InExtensionMessageRequester } from "@keplr-wallet/router-extension";
+import { BACKGROUND_PORT } from "@keplr-wallet/router";
+import {
+  BitpokerGetKeyMsg,
+  BitpokerOpenIntentMsg,
+  BitpokerSignPayloadMsg,
+  BitpokerSubmitResultMsg,
+} from "@keplr-wallet/background";
+import {
+  buildHelloSigningPayload,
+  RelayClient,
+  RelayType,
+} from "./relay-client";
 import { PokerWorkerClient } from "./worker-client";
 import { HandEffect, MatchedResult, TableState } from "./types";
+
+const hexToBytes = (hex: string): Uint8Array => {
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  }
+  return out;
+};
+const bytesToHex = (bytes: Uint8Array): string =>
+  Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 
 export interface JoinOptions {
   relayUrl: string;
@@ -30,11 +54,29 @@ export type GameStage =
   | "done"
   | "error";
 
+export interface ChainJoinOptions {
+  lcdUrl: string;
+  chainId: string;
+  playerName: string;
+  stake: string; // decimal, escrow denom units
+}
+
+export interface ChainProgress {
+  address?: string;
+  intentId?: string;
+  sessionId?: string;
+  relayId?: string;
+  relayEndpoint?: string;
+  resultTxHash?: string;
+  sessionStatus?: string;
+}
+
 export interface GameSnapshot {
   stage: GameStage;
   message: string;
   matched?: MatchedResult;
   table?: TableState;
+  chain?: ChainProgress;
   // wait === 0 means the action bar should be enabled.
   wait: number;
 }
@@ -46,6 +88,12 @@ export class PokerGameController {
   protected matched?: MatchedResult;
   protected announcement?: Uint8Array;
   protected running = false;
+
+  // On-chain session state (joinChain mode).
+  protected chainSession?: any;
+  protected chainAddress = "";
+  protected chainId = "";
+  protected chainLcdUrl = "";
 
   constructor(
     protected readonly onSnapshot: (snapshot: GameSnapshot) => void,
@@ -96,6 +144,162 @@ export class PokerGameController {
       });
       this.relay.sendAnnouncement(this.announcement);
       this.emit({ stage: "matching", message: "waiting for an opponent…" });
+
+      await this.pump();
+    } catch (e: any) {
+      this.fail(e?.message ?? String(e));
+    }
+  }
+
+  // Full on-chain session: open an intent from the wallet, wait for the chain
+  // to match it, load the session + assigned relay, authenticate to the relay
+  // with a cosmos-signature-v1 hello, play the hand with the chain-forced seat
+  // order, then submit the cooperative result and wait for SETTLED.
+  async joinChain(opts: ChainJoinOptions): Promise<void> {
+    if (this.running) {
+      throw new Error("already joined");
+    }
+    this.running = true;
+    const requester = new InExtensionMessageRequester();
+    const lcd = async (path: string): Promise<any> => {
+      const res = await fetch(opts.lcdUrl + path);
+      if (!res.ok) {
+        throw new Error(`LCD ${path}: ${res.status}`);
+      }
+      return res.json();
+    };
+    try {
+      const key = await requester.sendMessage(
+        BACKGROUND_PORT,
+        new BitpokerGetKeyMsg(opts.chainId)
+      );
+      const address = key.bech32Address;
+      this.chainAddress = address;
+      this.chainId = opts.chainId;
+      this.chainLcdUrl = opts.lcdUrl;
+      this.emit({
+        stage: "connecting",
+        chain: { address },
+        message: `opening game intent as ${address}…`,
+      });
+
+      await this.worker.newHand();
+      const sessionPubkeyHex = bytesToHex(await this.worker.localPubkey());
+
+      const intentTx = await requester.sendMessage(
+        BACKGROUND_PORT,
+        new BitpokerOpenIntentMsg(
+          opts.chainId,
+          opts.stake,
+          opts.stake,
+          "",
+          sessionPubkeyHex
+        )
+      );
+      if (intentTx.code !== 0) {
+        this.fail(`open-game-intent failed: ${intentTx.rawLog}`);
+        return;
+      }
+
+      this.emit({ stage: "matching", message: "waiting for a chain match…" });
+      let intentId = "";
+      let sessionId = "";
+      for (let attempt = 0; attempt < 120 && this.running; attempt++) {
+        const res = await lcd(
+          `/pokerchain/pokerchain/v1/intents?owner=${address}`
+        );
+        const intents: any[] = res.intents ?? res.intent ?? [];
+        const mine = intents
+          .filter((i) => i.player_session_pubkey === sessionPubkeyHex)
+          .sort((a, b) => Number(b.intent_id) - Number(a.intent_id))[0];
+        if (mine) {
+          intentId = String(mine.intent_id);
+          if (mine.matched_session_id && mine.matched_session_id !== "0") {
+            sessionId = String(mine.matched_session_id);
+            break;
+          }
+        }
+        this.emit({
+          chain: { ...this.snapshot.chain, intentId },
+          message: `intent ${intentId || "…"} open, waiting for an opponent…`,
+        });
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+      if (!sessionId) {
+        this.fail("no chain match within 120s");
+        return;
+      }
+
+      const sessionRes = await lcd(
+        `/pokerchain/pokerchain/v1/sessions/${sessionId}`
+      );
+      const session = sessionRes.session;
+      const relayId: string = session.relay_assignment.primary_relay;
+      const relayRes = await lcd(`/pokerchain/pokerchain/v1/relays/${relayId}`);
+      const relayEndpoint: string = relayRes.relay.endpoint;
+      this.chainSession = session;
+      this.emit({
+        chain: {
+          ...this.snapshot.chain,
+          intentId,
+          sessionId,
+          relayId,
+          relayEndpoint,
+        },
+        message: `matched session ${sessionId}: ${session.player_a} vs ${session.player_b}, relay ${relayId}`,
+      });
+
+      await this.worker.setSessionSeed(sessionId);
+      await this.worker.setChainSeats(session.player_a, session.player_b);
+
+      // cosmos-signature-v1 relay auth: timestamp + nonce are part of the
+      // signed text, so fix them before signing.
+      const timestampMillis = Date.now();
+      const nonce =
+        Math.random().toString(36).slice(2) + Date.now().toString(36);
+      const signText = buildHelloSigningPayload({
+        chainId: opts.chainId,
+        accountAddress: address,
+        networkAddress: address,
+        sessionId,
+        relayId,
+        playerSessionPubkey: sessionPubkeyHex,
+        timestampMillis,
+        nonce,
+      });
+      const signed = await requester.sendMessage(
+        BACKGROUND_PORT,
+        new BitpokerSignPayloadMsg(opts.chainId, signText)
+      );
+
+      this.relay = new RelayClient(relayEndpoint);
+      await this.relay.connect({
+        playerName: opts.playerName,
+        networkAddress: address,
+        chainId: opts.chainId,
+        accountAddress: address,
+        sessionId,
+        relayId,
+        playerSessionPubkey: sessionPubkeyHex,
+        authScheme: "cosmos-signature-v1",
+        authPayload: hexToBytes(signed.signature),
+        timestampMillis,
+        nonce,
+      });
+
+      const stake = parseInt(opts.stake, 10);
+      this.announcement = await this.worker.buildAnnouncement({
+        name: opts.playerName,
+        game: "TH",
+        chip: "CHIP",
+        opponent: "ANY",
+        minBet: stake,
+        maxBet: stake,
+        // Chain seats are matched by announcement address (chainPlayerA/B).
+        p2pAddr: address,
+      });
+      this.relay.sendAnnouncement(this.announcement);
+      this.emit({ message: "connected to relay, waiting for the opponent…" });
 
       await this.pump();
     } catch (e: any) {
@@ -188,13 +392,87 @@ export class PokerGameController {
     if (this.relay) {
       this.relay.close();
     }
-    if (status === 1) {
-      this.emit({ stage: "done", table, message: "hand settled" });
-    } else {
+    if (status !== 1) {
       this.emit({
         stage: "error",
         table,
         message: `hand ended abnormally (status ${status}) — dispute path applies`,
+      });
+      return;
+    }
+    if (!this.chainSession) {
+      this.emit({ stage: "done", table, message: "hand settled" });
+      return;
+    }
+    // On-chain session: submit the cooperative result and wait for SETTLED.
+    try {
+      const session = this.chainSession;
+      this.emit({
+        table,
+        message: "hand settled — submitting session result…",
+      });
+      const result = await this.worker.buildSessionResult({
+        chainSessionId: String(session.session_id),
+        playerA: session.player_a,
+        playerB: session.player_b,
+        finalStake: String(session.stake),
+        relayFee: String(session.relay_fee_snapshot ?? "0"),
+        localAddress: this.chainAddress,
+      });
+      if (result.error) {
+        throw new Error(result.error);
+      }
+      const requester = new InExtensionMessageRequester();
+      const tx = await requester.sendMessage(
+        BACKGROUND_PORT,
+        new BitpokerSubmitResultMsg(
+          this.chainId,
+          String(session.session_id),
+          result.winner ?? "",
+          result.loser ?? "",
+          result.finalStake ?? "0",
+          result.transcriptHash ?? "",
+          result.resultSignature ?? "",
+          result.splitPot ?? false
+        )
+      );
+      if (tx.code !== 0) {
+        throw new Error(`submit-session-result failed: ${tx.rawLog}`);
+      }
+      this.emit({
+        chain: { ...this.snapshot.chain, resultTxHash: tx.txHash },
+        message: `result submitted (${tx.txHash.slice(
+          0,
+          12
+        )}…), waiting for on-chain settlement…`,
+      });
+
+      const lcdUrl = this.chainLcdUrl;
+      for (let attempt = 0; attempt < 60; attempt++) {
+        const res = await fetch(
+          `${lcdUrl}/pokerchain/pokerchain/v1/sessions/${session.session_id}`
+        ).then((r) => r.json());
+        const sessionStatus: string = res.session?.status ?? "";
+        this.emit({ chain: { ...this.snapshot.chain, sessionStatus } });
+        if (/SETTLED/.test(sessionStatus)) {
+          this.emit({
+            stage: "done",
+            table,
+            message: `session ${session.session_id} settled on chain`,
+          });
+          return;
+        }
+        if (/DISPUTED|CANCELLED/.test(sessionStatus)) {
+          throw new Error(`session ended as ${sessionStatus}`);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+      throw new Error("session did not settle on chain within 60s");
+    } catch (e: any) {
+      this.emit({
+        stage: "error",
+        table,
+        message: e?.message ?? String(e),
       });
     }
   }

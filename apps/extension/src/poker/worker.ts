@@ -47,6 +47,8 @@ async function handle(cmd: string, args: any): Promise<any> {
     throw new Error("no hand session; call newHand first");
   }
   switch (cmd) {
+    case "localPubkey":
+      return hand.localPubkey();
     case "buildAnnouncement":
       return hand.buildAnnouncement(
         args.name,
@@ -54,7 +56,19 @@ async function handle(cmd: string, args: any): Promise<any> {
         args.chip,
         args.opponent,
         args.minBet | 0,
-        args.maxBet | 0
+        args.maxBet | 0,
+        args.p2pAddr || ""
+      );
+    case "setChainSeats":
+      return hand.setChainSeats(args.playerA, args.playerB);
+    case "buildSessionResult":
+      return hand.buildSessionResult(
+        args.chainSessionId,
+        args.playerA,
+        args.playerB,
+        args.finalStake,
+        args.relayFee,
+        args.localAddress
       );
     case "onPeerAnnouncement":
       return hand.onPeerAnnouncement(args.frame);

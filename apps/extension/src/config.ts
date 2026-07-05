@@ -3654,7 +3654,7 @@ export const EmbedChainInfos: EmbedChainInfo[] = [
     bip44: {
       coinType: 118,
     },
-    bech32Config: Bech32Address.defaultBech32Config("poker"),
+    bech32Config: Bech32Address.defaultBech32Config("xpoker"),
     currencies: [
       {
         coinDenom: "STAKE",

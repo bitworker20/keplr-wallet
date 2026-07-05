@@ -106,6 +106,8 @@ const PokerPage: React.FC = () => {
     playerName: "KeplrPlayer",
     minBet: "100",
     maxBet: "1000",
+    lcdUrl: "http://127.0.0.1:1317",
+    stake: "100",
   });
   const [betAmount, setBetAmount] = useState("0");
   const [diag, setDiag] = useState<{ selfTest?: string; sign?: string }>({});
@@ -182,6 +184,43 @@ const PokerPage: React.FC = () => {
         >
           [{snapshot.stage}] {snapshot.message}
         </span>
+      </div>
+
+      <div style={styles.block}>
+        <b>Play on-chain (pokerchain session)</b>
+        {field("lcdUrl", "lcd url", "22rem")}
+        {field("stake", "stake")}
+        <button
+          onClick={() =>
+            void controller.joinChain({
+              lcdUrl: form.lcdUrl,
+              chainId: POKER_CHAIN_ID,
+              playerName: form.playerName,
+              stake: form.stake,
+            })
+          }
+          disabled={formLocked}
+        >
+          Play on-chain
+        </button>
+        {snapshot.chain ? (
+          <div data-testid="chain">
+            {snapshot.chain.address ? `addr ${snapshot.chain.address} ` : ""}
+            {snapshot.chain.intentId
+              ? `intent ${snapshot.chain.intentId} `
+              : ""}
+            {snapshot.chain.sessionId
+              ? `session ${snapshot.chain.sessionId} `
+              : ""}
+            {snapshot.chain.relayId ? `relay ${snapshot.chain.relayId} ` : ""}
+            {snapshot.chain.resultTxHash
+              ? `result tx ${snapshot.chain.resultTxHash.slice(0, 12)}… `
+              : ""}
+            {snapshot.chain.sessionStatus
+              ? `status ${snapshot.chain.sessionStatus}`
+              : ""}
+          </div>
+        ) : null}
       </div>
 
       {t?.ready ? (

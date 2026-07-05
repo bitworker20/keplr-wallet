@@ -55,6 +55,9 @@ export class PokerWorkerClient {
       button: 0,
     });
   }
+  localPubkey(): Promise<Uint8Array> {
+    return this.call("localPubkey");
+  }
   buildAnnouncement(args: {
     name: string;
     game: string;
@@ -62,8 +65,30 @@ export class PokerWorkerClient {
     opponent: string;
     minBet: number;
     maxBet: number;
+    p2pAddr?: string;
   }): Promise<Uint8Array> {
     return this.call("buildAnnouncement", args);
+  }
+  setChainSeats(playerA: string, playerB: string): Promise<void> {
+    return this.call("setChainSeats", { playerA, playerB });
+  }
+  buildSessionResult(args: {
+    chainSessionId: string;
+    playerA: string;
+    playerB: string;
+    finalStake: string;
+    relayFee: string;
+    localAddress: string;
+  }): Promise<{
+    error?: string;
+    winner?: string;
+    loser?: string;
+    splitPot?: boolean;
+    finalStake?: string;
+    transcriptHash?: string;
+    resultSignature?: string;
+  }> {
+    return this.call("buildSessionResult", args);
   }
   onPeerAnnouncement(frame: Uint8Array): Promise<MatchedResult> {
     return this.call("onPeerAnnouncement", { frame });

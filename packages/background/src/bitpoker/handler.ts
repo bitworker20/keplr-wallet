@@ -6,7 +6,12 @@ import {
   Message,
 } from "@keplr-wallet/router";
 import { BitpokerService } from "./service";
-import { BitpokerSignPayloadMsg } from "./messages";
+import {
+  BitpokerGetKeyMsg,
+  BitpokerOpenIntentMsg,
+  BitpokerSignPayloadMsg,
+  BitpokerSubmitResultMsg,
+} from "./messages";
 
 export const getHandler: (service: BitpokerService) => Handler = (
   service: BitpokerService
@@ -17,6 +22,18 @@ export const getHandler: (service: BitpokerService) => Handler = (
         return handleBitpokerSignPayloadMsg(service)(
           env,
           msg as BitpokerSignPayloadMsg
+        );
+      case BitpokerGetKeyMsg:
+        return handleBitpokerGetKeyMsg(service)(env, msg as BitpokerGetKeyMsg);
+      case BitpokerOpenIntentMsg:
+        return handleBitpokerOpenIntentMsg(service)(
+          env,
+          msg as BitpokerOpenIntentMsg
+        );
+      case BitpokerSubmitResultMsg:
+        return handleBitpokerSubmitResultMsg(service)(
+          env,
+          msg as BitpokerSubmitResultMsg
         );
       default:
         throw new KeplrError("bitpoker", 100, "Unknown msg type");
@@ -29,5 +46,42 @@ const handleBitpokerSignPayloadMsg: (
 ) => InternalHandler<BitpokerSignPayloadMsg> = (service) => {
   return (env, msg) => {
     return service.signPayload(env, msg.chainId, msg.payload);
+  };
+};
+
+const handleBitpokerGetKeyMsg: (
+  service: BitpokerService
+) => InternalHandler<BitpokerGetKeyMsg> = (service) => {
+  return (env, msg) => {
+    return service.getKey(env, msg.chainId);
+  };
+};
+
+const handleBitpokerOpenIntentMsg: (
+  service: BitpokerService
+) => InternalHandler<BitpokerOpenIntentMsg> = (service) => {
+  return (env, msg) => {
+    return service.openIntent(env, msg.chainId, {
+      minStake: msg.minStake,
+      maxStake: msg.maxStake,
+      opponent: msg.opponent,
+      playerSessionPubkey: msg.playerSessionPubkey,
+    });
+  };
+};
+
+const handleBitpokerSubmitResultMsg: (
+  service: BitpokerService
+) => InternalHandler<BitpokerSubmitResultMsg> = (service) => {
+  return (env, msg) => {
+    return service.submitResult(env, msg.chainId, {
+      sessionId: msg.sessionId,
+      winner: msg.winner,
+      loser: msg.loser,
+      finalStake: msg.finalStake,
+      transcriptHash: msg.transcriptHash,
+      resultSignature: msg.resultSignature,
+      splitPot: msg.splitPot,
+    });
   };
 };

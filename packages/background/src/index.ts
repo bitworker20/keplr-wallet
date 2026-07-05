@@ -336,7 +336,11 @@ export function init(
       txExecutableMQ.subscriber
     );
 
-  const bitpokerService = new Bitpoker.BitpokerService(keyRingV2Service);
+  const bitpokerService = new Bitpoker.BitpokerService(
+    keyRingV2Service,
+    chainsService,
+    backgroundTxService
+  );
 
   Interaction.init(router, interactionService);
   Permission.init(router, permissionService);

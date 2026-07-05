@@ -2,6 +2,119 @@ import { Message } from "@keplr-wallet/router";
 import { ROUTE } from "./constants";
 import { BitpokerService } from "./service";
 
+export class BitpokerGetKeyMsg extends Message<{
+  bech32Address: string;
+  pubkeyHex: string;
+}> {
+  public static type() {
+    return "bitpoker-get-key";
+  }
+
+  constructor(public readonly chainId: string) {
+    super();
+  }
+
+  validateBasic(): void {
+    if (!this.chainId) {
+      throw new Error("chain id is empty");
+    }
+  }
+
+  route(): string {
+    return ROUTE;
+  }
+
+  type(): string {
+    return BitpokerGetKeyMsg.type();
+  }
+}
+
+export class BitpokerOpenIntentMsg extends Message<{
+  txHash: string;
+  code: number;
+  rawLog: string;
+}> {
+  public static type() {
+    return "bitpoker-open-intent";
+  }
+
+  constructor(
+    public readonly chainId: string,
+    public readonly minStake: string,
+    public readonly maxStake: string,
+    public readonly opponent: string,
+    public readonly playerSessionPubkey: string
+  ) {
+    super();
+  }
+
+  validateBasic(): void {
+    if (!this.chainId) {
+      throw new Error("chain id is empty");
+    }
+    if (!/^[0-9]+$/.test(this.minStake) || !/^[0-9]+$/.test(this.maxStake)) {
+      throw new Error("stakes must be decimal integers");
+    }
+    if (!this.playerSessionPubkey) {
+      throw new Error("player session pubkey is empty");
+    }
+  }
+
+  route(): string {
+    return ROUTE;
+  }
+
+  type(): string {
+    return BitpokerOpenIntentMsg.type();
+  }
+}
+
+export class BitpokerSubmitResultMsg extends Message<{
+  txHash: string;
+  code: number;
+  rawLog: string;
+}> {
+  public static type() {
+    return "bitpoker-submit-result";
+  }
+
+  constructor(
+    public readonly chainId: string,
+    public readonly sessionId: string,
+    public readonly winner: string,
+    public readonly loser: string,
+    public readonly finalStake: string,
+    public readonly transcriptHash: string,
+    public readonly resultSignature: string,
+    public readonly splitPot: boolean
+  ) {
+    super();
+  }
+
+  validateBasic(): void {
+    if (!this.chainId) {
+      throw new Error("chain id is empty");
+    }
+    if (!/^[0-9]+$/.test(this.sessionId)) {
+      throw new Error("session id must be a decimal integer");
+    }
+    if (!/^[0-9a-f]{64}$/.test(this.transcriptHash)) {
+      throw new Error("transcript hash must be sha256 hex");
+    }
+    if (!/^[0-9a-f]+$/.test(this.resultSignature)) {
+      throw new Error("result signature must be hex");
+    }
+  }
+
+  route(): string {
+    return ROUTE;
+  }
+
+  type(): string {
+    return BitpokerSubmitResultMsg.type();
+  }
+}
+
 export class BitpokerSignPayloadMsg extends Message<{
   // hex of compressed_pubkey(33) || r(32) || s(32)
   signature: string;
