@@ -1,47 +1,28 @@
-// BitPoker dev/integration page (chrome-extension://<id>/poker.html).
+// BitPoker game page (chrome-extension://<id>/poker.html).
 //
-// This page proves the three integration prerequisites inside the real
-// extension environment, before any game UI exists:
-//  1. gamecore.wasm loads and runs under the MV3 CSP ('wasm-unsafe-eval') —
-//     selfTest() exercises FourQ, SHA-256, SchnorrQ, a real mental-poker
-//     shuffle + NIZK verify, protobuf-lite, and a full Texas Hold'em hand;
-//  2. the background BitpokerSignPayloadMsg round-trip works (internal-only
-//     raw secp256k1-over-sha256 signing with the selected account's key);
-//  3. the pokerchain embedded chain is known to the wallet.
+// Plays one heads-up Texas Hold'em hand against a peer over a BitPoker relay:
+// announcement matchmaking, mental-poker shuffle, betting driven by the action
+// bar, showdown, and the signed settlement handshake. The gamecore wasm runs
+// in a Web Worker (hand crypto blocks for seconds); this page renders
+// tableState() snapshots and forwards button presses.
 //
-// The future game UI replaces this page; the loader + signing plumbing stay.
-import React, { useEffect, useState } from "react";
+// Wire-compatible with a native GameSession peer (same protocol the
+// bitpoker/test/interop e2e proves). Matchmaking via on-chain intents and the
+// dispute submission flow are the next step; the diagnostics section keeps the
+// integration self-tests from the previous milestone.
+import React, { useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { InExtensionMessageRequester } from "@keplr-wallet/router-extension";
 import { BACKGROUND_PORT } from "@keplr-wallet/router";
 import { BitpokerSignPayloadMsg } from "@keplr-wallet/background";
+import {
+  GameSnapshot,
+  PokerGameController,
+  JoinOptions,
+} from "./poker/controller";
+import { PokerActionKind, TableCard, PHASE_NAMES } from "./poker/types";
 
 const POKER_CHAIN_ID = "pokerchain-testnet-1";
-
-// gamecore.js is an emscripten MODULARIZE bundle (EXPORT_NAME=createGamecore)
-// vendored as a plain asset and loaded as a classic script, so webpack never
-// parses the emscripten glue. Both files are copied to the build root.
-function loadGamecore(): Promise<any> {
-  return new Promise((resolve, reject) => {
-    const existing = (window as any).createGamecore;
-    if (existing) {
-      resolve(existing());
-      return;
-    }
-    const script = document.createElement("script");
-    script.src = "gamecore.js";
-    script.onload = () => {
-      const factory = (window as any).createGamecore;
-      if (!factory) {
-        reject(new Error("gamecore.js loaded but createGamecore is missing"));
-        return;
-      }
-      resolve(factory());
-    };
-    script.onerror = () => reject(new Error("failed to load gamecore.js"));
-    document.head.appendChild(script);
-  });
-}
 
 const styles = {
   page: {
@@ -58,72 +39,298 @@ const styles = {
     margin: "1rem 0",
     overflowWrap: "anywhere",
   },
+  row: {
+    display: "flex",
+    gap: "0.5rem",
+    flexWrap: "wrap",
+    alignItems: "center",
+  },
+  label: { minWidth: "7rem", display: "inline-block" },
+  input: { fontFamily: "monospace", padding: "0.15rem 0.3rem" },
+  card: {
+    display: "inline-block",
+    border: "1px solid #666",
+    borderRadius: "0.3rem",
+    padding: "0.2rem 0.45rem",
+    marginRight: "0.3rem",
+    fontSize: "1.15rem",
+    fontWeight: 700,
+  },
   ok: { color: "#0a0" },
   err: { color: "#c00" },
+  turn: { color: "#0a0", fontWeight: 700 },
 } satisfies Record<string, React.CSSProperties>;
 
-const PokerDevPage: React.FC = () => {
-  const [selfTest, setSelfTest] = useState<string>("running…");
-  const [realHand, setRealHand] = useState<string>("running…");
-  const [signResult, setSignResult] = useState<string>("");
+const CardView: React.FC<{ card: TableCard }> = ({ card }) => {
+  const red = card.name.endsWith("D") || card.name.endsWith("H");
+  return (
+    <span style={{ ...styles.card, color: red ? "#c22" : "inherit" }}>
+      {card.name}
+    </span>
+  );
+};
 
-  useEffect(() => {
-    loadGamecore()
-      .then((m) => {
-        setSelfTest(m.selfTest());
-        setRealHand(m.runRealHand());
-      })
-      .catch((e) => {
-        setSelfTest(`ERROR: ${e.message ?? e}`);
-        setRealHand("skipped");
-      });
+const Cards: React.FC<{ cards?: TableCard[]; empty: string }> = ({
+  cards,
+  empty,
+}) => {
+  if (!cards || cards.length === 0) {
+    return <span style={{ opacity: 0.6 }}>{empty}</span>;
+  }
+  return (
+    <React.Fragment>
+      {cards.map((c) => (
+        <CardView key={c.index} card={c} />
+      ))}
+    </React.Fragment>
+  );
+};
+
+const PokerPage: React.FC = () => {
+  const [snapshot, setSnapshot] = useState<GameSnapshot>({
+    stage: "idle",
+    message: "",
+    wait: 1,
+  });
+  const controllerRef = useRef<PokerGameController>();
+  const controller = useMemo(() => {
+    const c = new PokerGameController(setSnapshot);
+    controllerRef.current = c;
+    return c;
   }, []);
 
-  const testSign = async () => {
-    setSignResult("signing…");
-    try {
-      const res = await new InExtensionMessageRequester().sendMessage(
-        BACKGROUND_PORT,
-        new BitpokerSignPayloadMsg(
-          POKER_CHAIN_ID,
-          "bitpoker-relay-client-hello-v1\npoker-dev-page-test"
-        )
-      );
-      setSignResult(`OK ${res.signature.length / 2} bytes: ${res.signature}`);
-    } catch (e: any) {
-      setSignResult(`ERROR: ${e.message ?? e}`);
-    }
+  const [form, setForm] = useState({
+    relayUrl: "ws://127.0.0.1:19910/relay",
+    relayId: "relay-local",
+    sessionId: "7777",
+    playerName: "KeplrPlayer",
+    minBet: "100",
+    maxBet: "1000",
+  });
+  const [betAmount, setBetAmount] = useState("0");
+  const [diag, setDiag] = useState<{ selfTest?: string; sign?: string }>({});
+
+  const formLocked = snapshot.stage !== "idle" && snapshot.stage !== "error";
+  const field = (key: keyof typeof form, label: string, width = "12rem") => (
+    <div>
+      <span style={styles.label}>{label}</span>
+      <input
+        style={{ ...styles.input, width }}
+        value={form[key]}
+        onChange={(e) => setForm({ ...form, [key]: e.target.value })}
+        disabled={formLocked}
+      />
+    </div>
+  );
+
+  const join = () => {
+    const opts: JoinOptions = {
+      relayUrl: form.relayUrl,
+      relayId: form.relayId,
+      sessionId: form.sessionId,
+      playerName: form.playerName,
+      accountAddress: `keplr-${form.playerName}`,
+      chainId: POKER_CHAIN_ID,
+      chip: "CHIP",
+      minBet: parseInt(form.minBet, 10) || 100,
+      maxBet: parseInt(form.maxBet, 10) || 1000,
+    };
+    void controller.join(opts);
   };
 
-  const statusStyle = (s: string) =>
-    s.startsWith("OK") ? styles.ok : s.startsWith("running") ? {} : styles.err;
+  const act = (kind: PokerActionKind) => {
+    void controller.act(kind, parseInt(betAmount, 10) || 0);
+  };
+
+  const t = snapshot.table;
+  const me = t?.localSeat ?? 0;
+  const peer = 1 - me;
+  const myTurn = snapshot.wait === 0 && snapshot.stage === "playing";
+  const toCall = t?.toCall ?? 0;
+  const settle = t?.settlement;
+  const mySettle = settle
+    ? me === 0
+      ? settle.firstAmount
+      : settle.secondAmount
+    : undefined;
+  const totalSettle = settle ? settle.firstAmount + settle.secondAmount : 0;
 
   return (
     <div style={styles.page}>
-      <h1>BitPoker integration self-test</h1>
+      <h1>BitPoker</h1>
+
       <div style={styles.block}>
-        <b>gamecore.wasm selfTest()</b>
-        <div style={statusStyle(selfTest)}>{selfTest}</div>
+        <b>Join a table</b>
+        {field("relayUrl", "relay url", "22rem")}
+        {field("relayId", "relay id")}
+        {field("sessionId", "session id")}
+        {field("playerName", "name")}
+        {field("minBet", "min bet")}
+        {field("maxBet", "max bet")}
+        <button onClick={join} disabled={formLocked}>
+          Join
+        </button>{" "}
+        <span
+          style={
+            snapshot.stage === "error"
+              ? styles.err
+              : snapshot.stage === "done"
+              ? styles.ok
+              : {}
+          }
+          data-testid="status"
+        >
+          [{snapshot.stage}] {snapshot.message}
+        </span>
       </div>
-      <div style={styles.block}>
-        <b>runRealHand()</b>
-        <div style={statusStyle(realHand)}>{realHand}</div>
-      </div>
-      <div style={styles.block}>
-        <b>background raw sign ({POKER_CHAIN_ID})</b>
-        <div>
-          <button onClick={testSign}>Sign test payload</button>
-          {" requires an unlocked wallet with an account"}
+
+      {t?.ready ? (
+        <div style={styles.block}>
+          <b>
+            Table — {PHASE_NAMES[t.phase ?? 0]} · pot {t.pot}
+            {t.currentBet ? ` · bet ${t.currentBet}` : ""}
+          </b>
+          <div>
+            board: <Cards cards={t.communityCards} empty="(no cards yet)" />
+          </div>
+          <div>
+            me ({snapshot.matched?.meFirst ? "first" : "second"}, stack{" "}
+            {t.players?.[me]?.stack}
+            {t.players?.[me]?.folded ? ", folded" : ""}):{" "}
+            <Cards cards={t.myHoleCards} empty="(dealing…)" />
+            {myTurn ? <span style={styles.turn}> ← your turn</span> : null}
+          </div>
+          <div>
+            opponent (stack {t.players?.[peer]?.stack}
+            {t.players?.[peer]?.folded ? ", folded" : ""}):{" "}
+            <Cards cards={t.peerHoleCards} empty="🂠 🂠" />
+          </div>
+
+          {snapshot.stage === "playing" ? (
+            <div style={{ ...styles.row, marginTop: "0.5rem" }}>
+              <button
+                disabled={!myTurn}
+                onClick={() => act(PokerActionKind.Fold)}
+              >
+                Fold
+              </button>
+              <button
+                disabled={!myTurn || toCall > 0}
+                onClick={() => act(PokerActionKind.Check)}
+              >
+                Check
+              </button>
+              <button
+                disabled={!myTurn || toCall === 0}
+                onClick={() => act(PokerActionKind.Call)}
+              >
+                Call {toCall > 0 ? toCall : ""}
+              </button>
+              <input
+                style={{ ...styles.input, width: "5rem" }}
+                value={betAmount}
+                onChange={(e) => setBetAmount(e.target.value)}
+                disabled={!myTurn}
+              />
+              <button
+                disabled={!myTurn || toCall > 0}
+                onClick={() => act(PokerActionKind.Bet)}
+              >
+                Bet
+              </button>
+              <button
+                disabled={!myTurn || toCall === 0}
+                onClick={() => act(PokerActionKind.Raise)}
+              >
+                Raise to
+              </button>
+              <button
+                disabled={!myTurn}
+                onClick={() => act(PokerActionKind.AllIn)}
+              >
+                All-in
+              </button>
+            </div>
+          ) : null}
+
+          {snapshot.stage === "done" && settle ? (
+            <div
+              style={{ ...styles.ok, marginTop: "0.5rem" }}
+              data-testid="result"
+            >
+              settled: you {mySettle} / opponent {totalSettle - (mySettle ?? 0)}{" "}
+              —{" "}
+              {(mySettle ?? 0) === totalSettle
+                ? "you win"
+                : (mySettle ?? 0) === 0
+                ? "opponent wins"
+                : "split pot"}
+            </div>
+          ) : null}
         </div>
-        {signResult ? (
-          <div style={statusStyle(signResult)}>{signResult}</div>
-        ) : null}
-      </div>
+      ) : null}
+
+      <details style={styles.block}>
+        <summary>Diagnostics</summary>
+        <div>
+          <button
+            onClick={() => {
+              setDiag((d) => ({ ...d, selfTest: "running…" }));
+              controller
+                .getWorker()
+                .selfTest()
+                .then((r) => setDiag((d) => ({ ...d, selfTest: r })))
+                .catch((e) =>
+                  setDiag((d) => ({ ...d, selfTest: `ERROR: ${e.message}` }))
+                );
+            }}
+          >
+            Run gamecore selfTest (in worker)
+          </button>
+          <div
+            style={diag.selfTest?.startsWith("OK") ? styles.ok : styles.err}
+            data-testid="selftest"
+          >
+            {diag.selfTest}
+          </div>
+        </div>
+        <div>
+          <button
+            onClick={() => {
+              setDiag((d) => ({ ...d, sign: "signing…" }));
+              new InExtensionMessageRequester()
+                .sendMessage(
+                  BACKGROUND_PORT,
+                  new BitpokerSignPayloadMsg(
+                    POKER_CHAIN_ID,
+                    "bitpoker-relay-client-hello-v1\npoker-page-test"
+                  )
+                )
+                .then((res) =>
+                  setDiag((d) => ({
+                    ...d,
+                    sign: `OK ${res.signature.length / 2} bytes: ${
+                      res.signature
+                    }`,
+                  }))
+                )
+                .catch((e) =>
+                  setDiag((d) => ({ ...d, sign: `ERROR: ${e.message ?? e}` }))
+                );
+            }}
+          >
+            Test background raw sign
+          </button>
+          <div style={diag.sign?.startsWith("OK") ? styles.ok : styles.err}>
+            {diag.sign}
+          </div>
+        </div>
+      </details>
     </div>
   );
 };
 
 const container = document.getElementById("app");
 if (container) {
-  createRoot(container).render(<PokerDevPage />);
+  createRoot(container).render(<PokerPage />);
 }

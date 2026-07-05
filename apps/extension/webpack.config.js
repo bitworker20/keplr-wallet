@@ -62,6 +62,7 @@ module.exports = {
     blocklist: ["./src/pages/blocklist/index.tsx"],
     ledgerGrant: ["./src/ledger-grant.tsx"],
     poker: ["./src/poker.tsx"],
+    pokerWorker: ["./src/poker/worker.ts"],
     background: ["./src/background/background.ts"],
     contentScripts: ["./src/content-scripts/content-scripts.ts"],
     injectedScript: ["./src/content-scripts/inject/injected-script.ts"],
@@ -80,7 +81,13 @@ module.exports = {
           return false;
         }
 
-        const servicePackages = ["contentScripts", "injectedScript"];
+        // pokerWorker is loaded via new Worker() and must stay a single
+        // self-contained file (workers can't share the page's chunk loading).
+        const servicePackages = [
+          "contentScripts",
+          "injectedScript",
+          "pokerWorker",
+        ];
 
         if (!isBuildManifestV2) {
           servicePackages.push("background");
