@@ -61,6 +61,7 @@ module.exports = {
     register: ["./src/register.tsx"],
     blocklist: ["./src/pages/blocklist/index.tsx"],
     ledgerGrant: ["./src/ledger-grant.tsx"],
+    poker: ["./src/poker.tsx"],
     background: ["./src/background/background.ts"],
     contentScripts: ["./src/content-scripts/content-scripts.ts"],
     injectedScript: ["./src/content-scripts/inject/injected-script.ts"],
@@ -221,6 +222,17 @@ module.exports = {
           from: "../../node_modules/webextension-polyfill/dist/browser-polyfill.js",
           to: "./",
         },
+        // BitPoker gamecore (emscripten): vendored artifacts loaded at runtime
+        // by poker.tsx as a classic script + wasm fetch, so webpack does not
+        // parse the emscripten glue. Regenerate via bitpoker/wasm/build_and_test.sh.
+        {
+          from: "./src/vendor/bitpoker/gamecore.js",
+          to: "./",
+        },
+        {
+          from: "./src/vendor/bitpoker/gamecore.wasm",
+          to: "./",
+        },
       ],
     }),
     // popup.html과 sidePanel.html은 사실 동일하다.
@@ -250,6 +262,11 @@ module.exports = {
       template: "./src/index.html",
       filename: "ledger-grant.html",
       chunks: ["ledgerGrant"],
+    }),
+    new HtmlWebpackPlugin({
+      template: "./src/index.html",
+      filename: "poker.html",
+      chunks: ["poker"],
     }),
     new HtmlWebpackPlugin({
       template: "./src/keplr-earn-product-terms.html",

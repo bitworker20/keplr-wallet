@@ -44,3 +44,6 @@ tsconfig.json
 
 android
 ios
+
+# Vendored generated artifacts (BitPoker gamecore, emscripten output)
+apps/extension/src/vendor/

@@ -32,6 +32,7 @@ import * as SidePanel from "./side-panel/internal";
 import * as Settings from "./settings/internal";
 import * as ManageViewAssetToken from "./manage-view-asset-token/internal";
 import * as BackgroundTxExecutor from "./tx-executor/internal";
+import * as Bitpoker from "./bitpoker/internal";
 
 export * from "./chains";
 export * from "./chains-ui";
@@ -60,6 +61,7 @@ export * from "./settings";
 export * from "./manage-view-asset-token";
 export * from "./tx-ethereum";
 export * from "./tx-executor";
+export * from "./bitpoker";
 
 import { KVStore } from "@keplr-wallet/common";
 import { ChainInfo, ModularChainInfo } from "@keplr-wallet/types";
@@ -334,6 +336,8 @@ export function init(
       txExecutableMQ.subscriber
     );
 
+  const bitpokerService = new Bitpoker.BitpokerService(keyRingV2Service);
+
   Interaction.init(router, interactionService);
   Permission.init(router, permissionService);
   Chains.init(
@@ -398,6 +402,7 @@ export function init(
   Settings.init(router, settingsService);
   ManageViewAssetToken.init(router, manageViewAssetTokenService);
   BackgroundTxExecutor.init(router, backgroundTxExecutorService);
+  Bitpoker.init(router, bitpokerService);
 
   return {
     initFn: async () => {

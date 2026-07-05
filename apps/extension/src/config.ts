@@ -3637,6 +3637,45 @@ export const EmbedChainInfos: EmbedChainInfo[] = [
     ],
     features: [],
   },
+  // BitPoker chain (this fork only): local/dev pokerchain endpoints for the
+  // bitpoker integration. The chain id matches scripts/testnet_genesis.sh's
+  // default; endpoints are the standard local node ports and can be pointed at
+  // a shared testnet later.
+  {
+    rpc: "http://127.0.0.1:26657",
+    rest: "http://127.0.0.1:1317",
+    chainId: "pokerchain-testnet-1",
+    chainName: "Pokerchain Testnet",
+    stakeCurrency: {
+      coinDenom: "STAKE",
+      coinMinimalDenom: "stake",
+      coinDecimals: 6,
+    },
+    bip44: {
+      coinType: 118,
+    },
+    bech32Config: Bech32Address.defaultBech32Config("poker"),
+    currencies: [
+      {
+        coinDenom: "STAKE",
+        coinMinimalDenom: "stake",
+        coinDecimals: 6,
+      },
+      {
+        coinDenom: "TOKEN",
+        coinMinimalDenom: "token",
+        coinDecimals: 6,
+      },
+    ],
+    feeCurrencies: [
+      {
+        coinDenom: "STAKE",
+        coinMinimalDenom: "stake",
+        coinDecimals: 6,
+      },
+    ],
+    features: [],
+  },
 ];
 
 export const isEmbeddedChainVisibleInNativeChainUI = (

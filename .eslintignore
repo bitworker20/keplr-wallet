@@ -42,3 +42,6 @@ packages/proto-types/outputHash
 
 android
 ios
+
+# Vendored generated artifacts (BitPoker gamecore, emscripten output)
+apps/extension/src/vendor/
