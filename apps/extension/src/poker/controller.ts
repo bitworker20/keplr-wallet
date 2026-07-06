@@ -36,6 +36,8 @@ const bytesToHex = (bytes: Uint8Array): string =>
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
 
+export type PokerGame = "TH" | "ZJH";
+
 export interface JoinOptions {
   relayUrl: string;
   relayId: string;
@@ -46,6 +48,7 @@ export interface JoinOptions {
   chip: string;
   minBet: number;
   maxBet: number;
+  game?: PokerGame;
 }
 
 export type GameStage =
@@ -63,6 +66,7 @@ export interface ChainJoinOptions {
   chainId: string;
   playerName: string;
   stake: string; // decimal, escrow denom units
+  game?: PokerGame;
 }
 
 export interface ChainProgress {
@@ -108,6 +112,9 @@ export class PokerGameController {
   // settlement.
   protected continueWish = true;
 
+  // The game this session plays (Texas Hold'em by default, or ZhaJinHua).
+  protected game: PokerGame = "TH";
+
   constructor(
     protected readonly onSnapshot: (snapshot: GameSnapshot) => void,
     worker?: PokerWorkerClient
@@ -141,12 +148,13 @@ export class PokerGameController {
       throw new Error("already joined");
     }
     this.running = true;
+    this.game = opts.game ?? "TH";
     try {
       this.emit({
         stage: "connecting",
         message: `connecting ${opts.relayUrl}`,
       });
-      await this.worker.newHand();
+      await this.worker.newHand(this.game);
       await this.worker.setContinueWish(this.continueWish);
 
       this.relay = new RelayClient(opts.relayUrl);
@@ -162,7 +170,7 @@ export class PokerGameController {
 
       this.announcement = await this.worker.buildAnnouncement({
         name: opts.playerName,
-        game: "TH",
+        game: this.game,
         chip: opts.chip,
         opponent: "ANY",
         minBet: opts.minBet,
@@ -194,6 +202,7 @@ export class PokerGameController {
       }
       return res.json();
     };
+    this.game = opts.game ?? "TH";
     try {
       const key = await requester.sendMessage(
         BACKGROUND_PORT,
@@ -209,7 +218,7 @@ export class PokerGameController {
         message: `opening game intent as ${address}…`,
       });
 
-      await this.worker.newHand();
+      await this.worker.newHand(this.game);
       await this.worker.setContinueWish(this.continueWish);
       const sessionPubkeyHex = bytesToHex(await this.worker.localPubkey());
 
@@ -217,6 +226,8 @@ export class PokerGameController {
         BACKGROUND_PORT,
         new BitpokerOpenIntentMsg(
           opts.chainId,
+          // GameType: TH=3, ZJH=2 (pokerchain enum).
+          this.game === "ZJH" ? 2 : 3,
           opts.stake,
           opts.stake,
           "",
@@ -317,7 +328,7 @@ export class PokerGameController {
       const stake = parseInt(opts.stake, 10);
       this.announcement = await this.worker.buildAnnouncement({
         name: opts.playerName,
-        game: "TH",
+        game: this.game,
         chip: "CHIP",
         opponent: "ANY",
         minBet: stake,

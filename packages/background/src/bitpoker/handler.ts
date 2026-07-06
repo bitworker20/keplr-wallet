@@ -74,6 +74,7 @@ const handleBitpokerOpenIntentMsg: (
 ) => InternalHandler<BitpokerOpenIntentMsg> = (service) => {
   return (env, msg) => {
     return service.openIntent(env, msg.chainId, {
+      gameType: msg.gameType,
       minStake: msg.minStake,
       maxStake: msg.maxStake,
       opponent: msg.opponent,

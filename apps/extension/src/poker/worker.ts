@@ -35,12 +35,19 @@ async function handle(cmd: string, args: any): Promise<any> {
     if (hand) {
       hand.delete();
     }
-    hand = new m.TexasHoldemHand(
-      args.firstChips | 0,
-      args.secondChips | 0,
-      args.localSeat | 0,
-      args.button | 0
-    );
+    hand =
+      args.game === "ZJH"
+        ? new m.ZhaJinHuaHand(
+            args.firstChips | 0,
+            args.secondChips | 0,
+            args.localSeat | 0
+          )
+        : new m.TexasHoldemHand(
+            args.firstChips | 0,
+            args.secondChips | 0,
+            args.localSeat | 0,
+            args.button | 0
+          );
     return true;
   }
   if (!hand) {

@@ -1,15 +1,14 @@
 // BitPoker game page (chrome-extension://<id>/poker.html).
 //
-// Plays one heads-up Texas Hold'em hand against a peer over a BitPoker relay:
-// announcement matchmaking, mental-poker shuffle, betting driven by the action
-// bar, showdown, and the signed settlement handshake. The gamecore wasm runs
-// in a Web Worker (hand crypto blocks for seconds); this page renders
-// tableState() snapshots and forwards button presses.
-//
-// Wire-compatible with a native GameSession peer (same protocol the
-// bitpoker/test/interop e2e proves). Matchmaking via on-chain intents and the
-// dispute submission flow are the next step; the diagnostics section keeps the
-// integration self-tests from the previous milestone.
+// Plays heads-up Texas Hold'em OR ZhaJinHua (three-card brag) against a peer
+// over a BitPoker relay — pick the game in the join form. Both run the same
+// flow: announcement matchmaking, mental-poker shuffle, betting driven by the
+// action bar, showdown, the signed settlement handshake, multi-hand
+// continuation, and (on-chain) escrowed settlement / dispute submission. The
+// gamecore wasm runs in a Web Worker (hand crypto blocks for seconds); this
+// page renders tableState() snapshots and forwards button presses. Wire- and
+// chain-compatible with a native GameSession peer (the bitpoker/test/interop
+// e2es prove both games, both peer orders, cooperative + dispute paths).
 import React, { useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { InExtensionMessageRequester } from "@keplr-wallet/router-extension";
@@ -19,8 +18,17 @@ import {
   GameSnapshot,
   PokerGameController,
   JoinOptions,
+  PokerGame,
 } from "./poker/controller";
-import { PokerActionKind, TableCard, PHASE_NAMES } from "./poker/types";
+import {
+  PokerActionKind,
+  ZjhActionKind,
+  TableCard,
+  TablePlayer,
+  ZjhPlayer,
+  TableState,
+  PHASE_NAMES,
+} from "./poker/types";
 
 const POKER_CHAIN_ID = "pokerchain-testnet-1";
 
@@ -86,6 +94,136 @@ const Cards: React.FC<{ cards?: TableCard[]; empty: string }> = ({
   );
 };
 
+const zjhStyles = {
+  block: {
+    border: "1px solid #888",
+    borderRadius: "0.5rem",
+    padding: "0.75rem 1rem",
+    margin: "1rem 0",
+    overflowWrap: "anywhere" as const,
+  },
+  row: {
+    display: "flex",
+    gap: "0.5rem",
+    flexWrap: "wrap" as const,
+    alignItems: "center" as const,
+    marginTop: "0.5rem",
+  },
+  turn: { color: "#0a0", fontWeight: 700 },
+  ok: { color: "#0a0" },
+};
+
+// ZhaJinHua (three-card brag) table: 3 private cards, ante/pot/dark-bet, and
+// the look/bet/call/raise/compare/fold action bar.
+const ZjhTable: React.FC<{
+  t: TableState;
+  me: number;
+  peer: number;
+  myTurn: boolean;
+  matched?: GameSnapshot["matched"];
+  stage: GameSnapshot["stage"];
+  continueWish: boolean;
+  betAmount: string;
+  setBetAmount: (v: string) => void;
+  act: (kind: number) => void;
+  setContinueWish: (wish: boolean) => void;
+}> = ({
+  t,
+  me,
+  peer,
+  myTurn,
+  matched,
+  stage,
+  continueWish,
+  betAmount,
+  setBetAmount,
+  act,
+  setContinueWish,
+}) => {
+  const players = (t.players as ZjhPlayer[] | undefined) ?? [];
+  const looked = players[me]?.looked ?? false;
+  const darkBet = t.currentDarkBet ?? 0;
+  const myBetCost = darkBet * (looked ? 2 : 1);
+  return (
+    <div style={zjhStyles.block}>
+      <b>
+        ZhaJinHua · Hand {t.handNumber ?? 1} · ante {t.ante} · pot {t.pot}
+        {t.dealing ? " · dealing…" : ` · dark bet ${darkBet}`}
+        {t.button === me ? " · you deal" : ""}
+      </b>
+      <div>
+        me ({matched?.meFirst ? "first" : "second"}
+        {looked ? ", looked" : ", blind"}
+        {players[me]?.folded ? ", folded" : ""}, in pot {players[me]?.committed}
+        ):{" "}
+        <Cards
+          cards={t.myCards}
+          empty={looked ? "(revealing…)" : "🂠 🂠 🂠 (blind)"}
+        />
+        {myTurn ? <span style={zjhStyles.turn}> ← your turn</span> : null}
+      </div>
+      <div>
+        opponent ({players[peer]?.looked ? "looked" : "blind"}
+        {players[peer]?.folded ? ", folded" : ""}, in pot{" "}
+        {players[peer]?.committed}): <Cards cards={t.peerCards} empty="🂠 🂠 🂠" />
+      </div>
+
+      {stage === "playing" ? (
+        <React.Fragment>
+          <div style={zjhStyles.row}>
+            <button disabled={!myTurn} onClick={() => act(ZjhActionKind.Fold)}>
+              Fold
+            </button>
+            <button
+              disabled={!myTurn || looked}
+              onClick={() => act(ZjhActionKind.Look)}
+            >
+              Look
+            </button>
+            <button disabled={!myTurn} onClick={() => act(ZjhActionKind.Call)}>
+              Call {myBetCost > 0 ? myBetCost : ""}
+            </button>
+            <input
+              style={{ fontFamily: "monospace", width: "5rem" }}
+              value={betAmount}
+              onChange={(e) => setBetAmount(e.target.value)}
+              disabled={!myTurn}
+            />
+            <button disabled={!myTurn} onClick={() => act(ZjhActionKind.Raise)}>
+              Raise
+            </button>
+            <button
+              disabled={!myTurn}
+              onClick={() => act(ZjhActionKind.Compare)}
+            >
+              Compare (showdown)
+            </button>
+          </div>
+          <div style={{ marginTop: "0.4rem" }}>
+            <label>
+              <input
+                type="checkbox"
+                checked={continueWish}
+                onChange={(e) => setContinueWish(e.target.checked)}
+              />{" "}
+              Play another hand after this one
+            </label>
+          </div>
+        </React.Fragment>
+      ) : null}
+
+      {(stage === "done" || stage === "disputed") && t.showdownComplete ? (
+        <div
+          style={{ ...zjhStyles.ok, marginTop: "0.5rem" }}
+          data-testid="result"
+        >
+          showdown complete — {matched?.meFirst ? "first" : "second"} seat
+        </div>
+      ) : null}
+    </div>
+  );
+};
+
 const PokerPage: React.FC = () => {
   const [snapshot, setSnapshot] = useState<GameSnapshot>({
     stage: "idle",
@@ -109,6 +247,7 @@ const PokerPage: React.FC = () => {
     lcdUrl: "http://127.0.0.1:1317",
     stake: "100",
   });
+  const [game, setGame] = useState<PokerGame>("TH");
   const [betAmount, setBetAmount] = useState("0");
   const [diag, setDiag] = useState<{ selfTest?: string; sign?: string }>({});
 
@@ -138,19 +277,36 @@ const PokerPage: React.FC = () => {
       chip: "CHIP",
       minBet: parseInt(form.minBet, 10) || 100,
       maxBet: parseInt(form.maxBet, 10) || 1000,
+      game,
     };
     void controller.join(opts);
   };
 
-  const act = (kind: PokerActionKind) => {
+  const act = (kind: number) => {
     void controller.act(kind, parseInt(betAmount, 10) || 0);
   };
 
+  const gameSelector = (
+    <div>
+      <span style={styles.label}>game</span>
+      <select
+        value={game}
+        onChange={(e) => setGame(e.target.value as PokerGame)}
+        disabled={formLocked}
+      >
+        <option value="TH">Texas Hold&apos;em</option>
+        <option value="ZJH">ZhaJinHua (三张)</option>
+      </select>
+    </div>
+  );
+
   const t = snapshot.table;
+  const isZjh = t?.game === "ZJH";
   const me = t?.localSeat ?? 0;
   const peer = 1 - me;
   const myTurn = snapshot.wait === 0 && snapshot.stage === "playing";
   const toCall = t?.toCall ?? 0;
+  const thPlayers = t?.players as TablePlayer[] | undefined;
   const settle = t?.settlement;
   const mySettle = settle
     ? me === 0
@@ -165,6 +321,7 @@ const PokerPage: React.FC = () => {
 
       <div style={styles.block}>
         <b>Join a table</b>
+        {gameSelector}
         {field("relayUrl", "relay url", "22rem")}
         {field("relayId", "relay id")}
         {field("sessionId", "session id")}
@@ -199,11 +356,12 @@ const PokerPage: React.FC = () => {
               chainId: POKER_CHAIN_ID,
               playerName: form.playerName,
               stake: form.stake,
+              game,
             })
           }
           disabled={formLocked}
         >
-          Play on-chain
+          Play on-chain ({game})
         </button>
         {snapshot.chain ? (
           <div data-testid="chain">
@@ -225,7 +383,23 @@ const PokerPage: React.FC = () => {
         ) : null}
       </div>
 
-      {t?.ready ? (
+      {t?.ready && isZjh ? (
+        <ZjhTable
+          t={t}
+          me={me}
+          peer={peer}
+          myTurn={myTurn}
+          matched={snapshot.matched}
+          stage={snapshot.stage}
+          continueWish={snapshot.continueWish ?? true}
+          betAmount={betAmount}
+          setBetAmount={setBetAmount}
+          act={act}
+          setContinueWish={(w) => void controller.setContinueWish(w)}
+        />
+      ) : null}
+
+      {t?.ready && !isZjh ? (
         <div style={styles.block}>
           <b>
             Hand {t.handNumber ?? 1} — {PHASE_NAMES[t.phase ?? 0]} · pot {t.pot}
@@ -238,14 +412,14 @@ const PokerPage: React.FC = () => {
           </div>
           <div>
             me ({snapshot.matched?.meFirst ? "first" : "second"}, stack{" "}
-            {t.players?.[me]?.stack}
-            {t.players?.[me]?.folded ? ", folded" : ""}):{" "}
+            {thPlayers?.[me]?.stack}
+            {thPlayers?.[me]?.folded ? ", folded" : ""}):{" "}
             <Cards cards={t.myHoleCards} empty="(dealing…)" />
             {myTurn ? <span style={styles.turn}> ← your turn</span> : null}
           </div>
           <div>
-            opponent (stack {t.players?.[peer]?.stack}
-            {t.players?.[peer]?.folded ? ", folded" : ""}):{" "}
+            opponent (stack {thPlayers?.[peer]?.stack}
+            {thPlayers?.[peer]?.folded ? ", folded" : ""}):{" "}
             <Cards cards={t.peerHoleCards} empty="🂠 🂠" />
           </div>
 

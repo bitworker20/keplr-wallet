@@ -126,6 +126,7 @@ export class BitpokerService {
     env: Env,
     chainId: string,
     args: {
+      gameType: number;
       minStake: string;
       maxStake: string;
       opponent: string;
@@ -138,7 +139,7 @@ export class BitpokerService {
     const { bech32Address } = await this.getKey(env, chainId);
     const msg = encodeMsgOpenGameIntent({
       creator: bech32Address,
-      gameType: POKERCHAIN_GAME_TYPE_TH,
+      gameType: args.gameType || POKERCHAIN_GAME_TYPE_TH,
       minStake: args.minStake,
       maxStake: args.maxStake,
       opponent: args.opponent,

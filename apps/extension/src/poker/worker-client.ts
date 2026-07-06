@@ -46,9 +46,10 @@ export class PokerWorkerClient {
   selfTest(): Promise<string> {
     return this.call("selfTest");
   }
-  newHand(): Promise<boolean> {
+  newHand(game: "TH" | "ZJH" = "TH"): Promise<boolean> {
     // Chips/seat are overridden by the matchmaking result.
     return this.call("newHand", {
+      game,
       firstChips: 0,
       secondChips: 0,
       localSeat: 0,

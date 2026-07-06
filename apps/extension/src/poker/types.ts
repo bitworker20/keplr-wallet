@@ -28,9 +28,16 @@ export interface TablePlayer {
   allIn: boolean;
 }
 
+export interface ZjhPlayer {
+  committed: number;
+  looked: boolean;
+  folded: boolean;
+}
+
 export interface TableState {
   ready: boolean;
-  phase?: number; // 0=Preflop 1=Flop 2=Turn 3=River 4=Showdown 5=Complete
+  game?: "TH" | "ZJH";
+  phase?: number; // TH: 0=Preflop 1=Flop 2=Turn 3=River 4=Showdown 5=Complete
   pot?: number;
   currentBet?: number;
   smallBlind?: number;
@@ -39,7 +46,7 @@ export interface TableState {
   localSeat?: number;
   button?: number;
   currentActor?: number;
-  players?: TablePlayer[];
+  players?: TablePlayer[] | ZjhPlayer[];
   myHoleCards?: TableCard[];
   peerHoleCards?: TableCard[];
   communityCards?: TableCard[];
@@ -52,6 +59,23 @@ export interface TableState {
   handsPlayed?: number;
   continueWish?: boolean;
   dealing?: boolean;
+  // ZJH-specific
+  ante?: number;
+  currentDarkBet?: number;
+  myCards?: TableCard[];
+  peerCards?: TableCard[];
+  showdownComplete?: boolean;
+}
+
+// ZJH action kinds for onLocalAction (matches zjhActionFromKind in the wasm).
+export enum ZjhActionKind {
+  Fold = 0,
+  Check = 1,
+  Call = 2,
+  Bet = 3,
+  Raise = 4,
+  Look = 5,
+  Compare = 6,
 }
 
 // kind values for onLocalAction (matches the wasm boundary)
