@@ -112,7 +112,9 @@ const PokerPage: React.FC = () => {
   const [betAmount, setBetAmount] = useState("0");
   const [diag, setDiag] = useState<{ selfTest?: string; sign?: string }>({});
 
-  const formLocked = snapshot.stage !== "idle" && snapshot.stage !== "error";
+  const formLocked = !["idle", "error", "done", "disputed"].includes(
+    snapshot.stage
+  );
   const field = (key: keyof typeof form, label: string, width = "12rem") => (
     <div>
       <span style={styles.label}>{label}</span>
@@ -176,7 +178,7 @@ const PokerPage: React.FC = () => {
           style={
             snapshot.stage === "error"
               ? styles.err
-              : snapshot.stage === "done"
+              : snapshot.stage === "done" || snapshot.stage === "disputed"
               ? styles.ok
               : {}
           }

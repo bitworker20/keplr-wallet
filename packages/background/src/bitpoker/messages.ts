@@ -115,6 +115,93 @@ export class BitpokerSubmitResultMsg extends Message<{
   }
 }
 
+export class BitpokerSubmitEvidenceMsg extends Message<{
+  txHash: string;
+  code: number;
+  rawLog: string;
+}> {
+  public static type() {
+    return "bitpoker-submit-evidence";
+  }
+
+  constructor(
+    public readonly chainId: string,
+    public readonly sessionId: string,
+    public readonly evidenceHash: string,
+    public readonly evidencePayloadHex: string,
+    public readonly evidenceSignature: string,
+    public readonly reason: string
+  ) {
+    super();
+  }
+
+  validateBasic(): void {
+    if (!this.chainId) {
+      throw new Error("chain id is empty");
+    }
+    if (!/^[0-9]+$/.test(this.sessionId)) {
+      throw new Error("session id must be a decimal integer");
+    }
+    if (!/^[0-9a-f]{64}$/.test(this.evidenceHash)) {
+      throw new Error("evidence hash must be sha256 hex");
+    }
+    if (!/^[0-9a-f]+$/.test(this.evidencePayloadHex)) {
+      throw new Error("evidence payload must be hex");
+    }
+  }
+
+  route(): string {
+    return ROUTE;
+  }
+
+  type(): string {
+    return BitpokerSubmitEvidenceMsg.type();
+  }
+}
+
+export class BitpokerSubmitSecretMsg extends Message<{
+  txHash: string;
+  code: number;
+  rawLog: string;
+}> {
+  public static type() {
+    return "bitpoker-submit-secret";
+  }
+
+  constructor(
+    public readonly chainId: string,
+    public readonly sessionId: string,
+    public readonly sessionSecretKeyHex: string,
+    public readonly sessionPubkeyHex: string
+  ) {
+    super();
+  }
+
+  validateBasic(): void {
+    if (!this.chainId) {
+      throw new Error("chain id is empty");
+    }
+    if (!/^[0-9]+$/.test(this.sessionId)) {
+      throw new Error("session id must be a decimal integer");
+    }
+    // 32-byte scalar, 96-byte FiatShamir key.
+    if (!/^[0-9a-f]{64}$/.test(this.sessionSecretKeyHex)) {
+      throw new Error("session secret key must be 32-byte hex");
+    }
+    if (!/^[0-9a-f]{192}$/.test(this.sessionPubkeyHex)) {
+      throw new Error("session pubkey must be 96-byte hex");
+    }
+  }
+
+  route(): string {
+    return ROUTE;
+  }
+
+  type(): string {
+    return BitpokerSubmitSecretMsg.type();
+  }
+}
+
 export class BitpokerSignPayloadMsg extends Message<{
   // hex of compressed_pubkey(33) || r(32) || s(32)
   signature: string;

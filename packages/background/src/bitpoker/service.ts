@@ -15,9 +15,13 @@ import { ChainsService } from "../chains";
 import { BackgroundTxService } from "../tx";
 import {
   encodeMsgOpenGameIntent,
+  encodeMsgSubmitSessionEvidence,
   encodeMsgSubmitSessionResult,
+  encodeMsgSubmitSessionSecret,
   MSG_OPEN_GAME_INTENT_TYPE_URL,
+  MSG_SUBMIT_SESSION_EVIDENCE_TYPE_URL,
   MSG_SUBMIT_SESSION_RESULT_TYPE_URL,
+  MSG_SUBMIT_SESSION_SECRET_TYPE_URL,
   POKERCHAIN_GAME_TYPE_TH,
 } from "./proto-writer";
 
@@ -178,6 +182,70 @@ export class BitpokerService {
     return this.broadcastPokerMsg(
       chainId,
       MSG_SUBMIT_SESSION_RESULT_TYPE_URL,
+      msg,
+      "400000"
+    );
+  }
+
+  // Dispute path (ADR-003): the first evidence submission moves the session to
+  // DISPUTED, protecting the escrow; the secret lets validators decrypt and
+  // adjudicate the disputed hand. Evidence payload bytes come from the
+  // gamecore's buildDisputeEvidence (canonical SessionEvidencePayload).
+  async submitEvidence(
+    env: Env,
+    chainId: string,
+    args: {
+      sessionId: string;
+      evidenceHash: string;
+      evidencePayloadHex: string;
+      evidenceSignature: string;
+      reason: string;
+    }
+  ): Promise<{ txHash: string; code: number; rawLog: string }> {
+    if (!env.isInternalMsg) {
+      throw new Error("bitpoker tx is only allowed for internal messages");
+    }
+    const { bech32Address } = await this.getKey(env, chainId);
+    const msg = encodeMsgSubmitSessionEvidence({
+      creator: bech32Address,
+      sessionId: args.sessionId,
+      evidenceHash: args.evidenceHash,
+      evidencePayload: Buffer.from(args.evidencePayloadHex, "hex"),
+      evidenceSignature: args.evidenceSignature,
+      reason: args.reason,
+    });
+    // Evidence carries the full message-history payload, so it needs a high gas
+    // limit (per-byte write cost); the local dev chain has zero gas price.
+    return this.broadcastPokerMsg(
+      chainId,
+      MSG_SUBMIT_SESSION_EVIDENCE_TYPE_URL,
+      msg,
+      "3000000"
+    );
+  }
+
+  async submitSecret(
+    env: Env,
+    chainId: string,
+    args: {
+      sessionId: string;
+      sessionSecretKeyHex: string;
+      sessionPubkeyHex: string;
+    }
+  ): Promise<{ txHash: string; code: number; rawLog: string }> {
+    if (!env.isInternalMsg) {
+      throw new Error("bitpoker tx is only allowed for internal messages");
+    }
+    const { bech32Address } = await this.getKey(env, chainId);
+    const msg = encodeMsgSubmitSessionSecret({
+      creator: bech32Address,
+      sessionId: args.sessionId,
+      sessionSecretKey: Buffer.from(args.sessionSecretKeyHex, "hex"),
+      sessionPubkey: Buffer.from(args.sessionPubkeyHex, "hex"),
+    });
+    return this.broadcastPokerMsg(
+      chainId,
+      MSG_SUBMIT_SESSION_SECRET_TYPE_URL,
       msg,
       "400000"
     );

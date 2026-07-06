@@ -10,7 +10,9 @@ import {
   BitpokerGetKeyMsg,
   BitpokerOpenIntentMsg,
   BitpokerSignPayloadMsg,
+  BitpokerSubmitEvidenceMsg,
   BitpokerSubmitResultMsg,
+  BitpokerSubmitSecretMsg,
 } from "./messages";
 
 export const getHandler: (service: BitpokerService) => Handler = (
@@ -34,6 +36,16 @@ export const getHandler: (service: BitpokerService) => Handler = (
         return handleBitpokerSubmitResultMsg(service)(
           env,
           msg as BitpokerSubmitResultMsg
+        );
+      case BitpokerSubmitEvidenceMsg:
+        return handleBitpokerSubmitEvidenceMsg(service)(
+          env,
+          msg as BitpokerSubmitEvidenceMsg
+        );
+      case BitpokerSubmitSecretMsg:
+        return handleBitpokerSubmitSecretMsg(service)(
+          env,
+          msg as BitpokerSubmitSecretMsg
         );
       default:
         throw new KeplrError("bitpoker", 100, "Unknown msg type");
@@ -82,6 +94,32 @@ const handleBitpokerSubmitResultMsg: (
       transcriptHash: msg.transcriptHash,
       resultSignature: msg.resultSignature,
       splitPot: msg.splitPot,
+    });
+  };
+};
+
+const handleBitpokerSubmitEvidenceMsg: (
+  service: BitpokerService
+) => InternalHandler<BitpokerSubmitEvidenceMsg> = (service) => {
+  return (env, msg) => {
+    return service.submitEvidence(env, msg.chainId, {
+      sessionId: msg.sessionId,
+      evidenceHash: msg.evidenceHash,
+      evidencePayloadHex: msg.evidencePayloadHex,
+      evidenceSignature: msg.evidenceSignature,
+      reason: msg.reason,
+    });
+  };
+};
+
+const handleBitpokerSubmitSecretMsg: (
+  service: BitpokerService
+) => InternalHandler<BitpokerSubmitSecretMsg> = (service) => {
+  return (env, msg) => {
+    return service.submitSecret(env, msg.chainId, {
+      sessionId: msg.sessionId,
+      sessionSecretKeyHex: msg.sessionSecretKeyHex,
+      sessionPubkeyHex: msg.sessionPubkeyHex,
     });
   };
 };

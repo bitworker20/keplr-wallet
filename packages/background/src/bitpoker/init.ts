@@ -4,7 +4,9 @@ import {
   BitpokerGetKeyMsg,
   BitpokerOpenIntentMsg,
   BitpokerSignPayloadMsg,
+  BitpokerSubmitEvidenceMsg,
   BitpokerSubmitResultMsg,
+  BitpokerSubmitSecretMsg,
 } from "./messages";
 import { ROUTE } from "./constants";
 import { getHandler } from "./handler";
@@ -14,6 +16,8 @@ export function init(router: Router, service: BitpokerService): void {
   router.registerMessage(BitpokerGetKeyMsg);
   router.registerMessage(BitpokerOpenIntentMsg);
   router.registerMessage(BitpokerSubmitResultMsg);
+  router.registerMessage(BitpokerSubmitEvidenceMsg);
+  router.registerMessage(BitpokerSubmitSecretMsg);
 
   router.addHandler(ROUTE, getHandler(service));
 }

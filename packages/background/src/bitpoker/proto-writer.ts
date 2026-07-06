@@ -119,7 +119,43 @@ export function encodeMsgSubmitSessionResult(msg: {
     .finish();
 }
 
+export function encodeMsgSubmitSessionEvidence(msg: {
+  creator: string;
+  sessionId: string;
+  evidenceHash: string;
+  evidencePayload: Uint8Array;
+  evidenceSignature: string;
+  reason: string;
+}): Uint8Array {
+  return new ProtoWriter()
+    .string(1, msg.creator)
+    .uint64(2, msg.sessionId)
+    .string(3, msg.evidenceHash)
+    .bytes(4, msg.evidencePayload)
+    .string(5, msg.evidenceSignature)
+    .string(6, msg.reason)
+    .finish();
+}
+
+export function encodeMsgSubmitSessionSecret(msg: {
+  creator: string;
+  sessionId: string;
+  sessionSecretKey: Uint8Array;
+  sessionPubkey: Uint8Array;
+}): Uint8Array {
+  return new ProtoWriter()
+    .string(1, msg.creator)
+    .uint64(2, msg.sessionId)
+    .bytes(3, msg.sessionSecretKey)
+    .bytes(4, msg.sessionPubkey)
+    .finish();
+}
+
 export const MSG_OPEN_GAME_INTENT_TYPE_URL =
   "/pokerchain.pokerchain.v1.MsgOpenGameIntent";
 export const MSG_SUBMIT_SESSION_RESULT_TYPE_URL =
   "/pokerchain.pokerchain.v1.MsgSubmitSessionResult";
+export const MSG_SUBMIT_SESSION_EVIDENCE_TYPE_URL =
+  "/pokerchain.pokerchain.v1.MsgSubmitSessionEvidence";
+export const MSG_SUBMIT_SESSION_SECRET_TYPE_URL =
+  "/pokerchain.pokerchain.v1.MsgSubmitSessionSecret";

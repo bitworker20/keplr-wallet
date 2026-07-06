@@ -12,7 +12,9 @@ import {
   BitpokerGetKeyMsg,
   BitpokerOpenIntentMsg,
   BitpokerSignPayloadMsg,
+  BitpokerSubmitEvidenceMsg,
   BitpokerSubmitResultMsg,
+  BitpokerSubmitSecretMsg,
 } from "@keplr-wallet/background";
 import {
   buildHelloSigningPayload,
@@ -52,6 +54,8 @@ export type GameStage =
   | "matching"
   | "playing"
   | "done"
+  | "disputing"
+  | "disputed"
   | "error";
 
 export interface ChainJoinOptions {
@@ -68,6 +72,7 @@ export interface ChainProgress {
   relayId?: string;
   relayEndpoint?: string;
   resultTxHash?: string;
+  evidenceTxHash?: string;
   sessionStatus?: string;
 }
 
@@ -321,16 +326,26 @@ export class PokerGameController {
 
   protected async pump(): Promise<void> {
     while (this.running && this.relay) {
-      const frame = await this.relay.nextFrame(120000);
+      // A missing frame for this long mid-hand is treated as a disconnect
+      // (matches bitpoker's NETWORK_MESSAGE_TIMEOUT); in a chain session it
+      // escalates to the dispute path.
+      const frame = await this.relay.nextFrame(30000);
       if (this.snapshot.stage === "done") {
         return;
       }
       if (!frame) {
-        this.fail(
-          this.relay.closed
-            ? "relay connection closed"
-            : "timed out waiting for the opponent"
-        );
+        const reason = this.relay.closed
+          ? "relay connection closed"
+          : "timed out waiting for the opponent";
+        // On-chain session interrupted mid-hand: escalate to the chain dispute
+        // path (submit evidence + secret -> DISPUTED) instead of just failing,
+        // so the escrow is protected and the hand can be adjudicated. Only once
+        // we have matched (there is a real session + message history to attest).
+        if (this.chainSession && this.matched) {
+          await this.submitDispute(reason);
+        } else {
+          this.fail(reason);
+        }
         return;
       }
 
@@ -474,6 +489,94 @@ export class PokerGameController {
         table,
         message: e?.message ?? String(e),
       });
+    }
+  }
+
+  // On-chain dispute escalation (ADR-003): build the canonical evidence from
+  // the recorded transcript, sign it, and submit evidence + the per-hand secret
+  // so the chain marks the session DISPUTED (protecting the escrow) and can
+  // adjudicate the abandoned hand.
+  protected async submitDispute(reason: string): Promise<void> {
+    this.running = false;
+    if (this.relay) {
+      this.relay.close();
+    }
+    const session = this.chainSession;
+    try {
+      this.emit({
+        stage: "disputing",
+        message: `hand interrupted (${reason}) — submitting dispute evidence…`,
+      });
+      const evidence = await this.worker.buildDisputeEvidence({
+        chainSessionId: String(session.session_id),
+        submitter: this.chainAddress,
+        // ARBITRATION_REASON_CODE_CONNECTION_LOST = 6
+        reasonCode: 6,
+        reasonLabel: "connection-lost",
+        reasonDescription: reason,
+      });
+      if (evidence.error) {
+        throw new Error(evidence.error);
+      }
+      const requester = new InExtensionMessageRequester();
+      // The evidence signing payload carries the bitpoker-session-evidence-v1
+      // domain prefix, so the internal raw signer accepts it.
+      const signed = await requester.sendMessage(
+        BACKGROUND_PORT,
+        new BitpokerSignPayloadMsg(this.chainId, evidence.signingPayload ?? "")
+      );
+      const evidenceTx = await requester.sendMessage(
+        BACKGROUND_PORT,
+        new BitpokerSubmitEvidenceMsg(
+          this.chainId,
+          String(session.session_id),
+          evidence.evidenceHash ?? "",
+          evidence.payloadHex ?? "",
+          signed.signature,
+          evidence.reason ?? "connection-lost"
+        )
+      );
+      if (evidenceTx.code !== 0) {
+        throw new Error(`submit-session-evidence failed: ${evidenceTx.rawLog}`);
+      }
+      this.emit({
+        chain: { ...this.snapshot.chain, evidenceTxHash: evidenceTx.txHash },
+        message: "evidence submitted — revealing session secret…",
+      });
+
+      const secret = await this.worker.exportSessionSecret();
+      const secretTx = await requester.sendMessage(
+        BACKGROUND_PORT,
+        new BitpokerSubmitSecretMsg(
+          this.chainId,
+          String(session.session_id),
+          bytesToHex(secret.secretKey),
+          bytesToHex(secret.pubkey)
+        )
+      );
+      if (secretTx.code !== 0) {
+        throw new Error(`submit-session-secret failed: ${secretTx.rawLog}`);
+      }
+
+      // Confirm the session is DISPUTED (the escrow-protecting transition).
+      for (let attempt = 0; attempt < 30; attempt++) {
+        const res = await fetch(
+          `${this.chainLcdUrl}/pokerchain/pokerchain/v1/sessions/${session.session_id}`
+        ).then((r) => r.json());
+        const sessionStatus: string = res.session?.status ?? "";
+        this.emit({ chain: { ...this.snapshot.chain, sessionStatus } });
+        if (/DISPUTED/.test(sessionStatus)) {
+          this.emit({
+            stage: "disputed",
+            message: `session ${session.session_id} disputed on chain — awaiting adjudication`,
+          });
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+      throw new Error("session was not marked disputed within 30s");
+    } catch (e: any) {
+      this.emit({ stage: "error", message: e?.message ?? String(e) });
     }
   }
 
