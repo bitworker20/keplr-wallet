@@ -47,6 +47,11 @@ export interface TableState {
   settled?: boolean;
   wait?: number;
   toCall?: number;
+  // Multi-hand
+  handNumber?: number;
+  handsPlayed?: number;
+  continueWish?: boolean;
+  dealing?: boolean;
 }
 
 // kind values for onLocalAction (matches the wasm boundary)

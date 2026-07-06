@@ -84,6 +84,8 @@ export interface GameSnapshot {
   chain?: ChainProgress;
   // wait === 0 means the action bar should be enabled.
   wait: number;
+  // The local "keep playing after this hand" wish (multi-hand).
+  continueWish?: boolean;
 }
 
 export class PokerGameController {
@@ -100,6 +102,12 @@ export class PokerGameController {
   protected chainId = "";
   protected chainLcdUrl = "";
 
+  // Multi-hand: the local player's wish to keep playing after each hand
+  // (default auto-continue). The session continues only if BOTH players wish
+  // to; the UI toggles this and it takes effect at the current hand's
+  // settlement.
+  protected continueWish = true;
+
   constructor(
     protected readonly onSnapshot: (snapshot: GameSnapshot) => void,
     worker?: PokerWorkerClient
@@ -109,6 +117,18 @@ export class PokerGameController {
 
   getWorker(): PokerWorkerClient {
     return this.worker;
+  }
+
+  // The UI's "play another hand after this one" toggle. Takes effect at the
+  // current hand's settlement.
+  async setContinueWish(wish: boolean): Promise<void> {
+    this.continueWish = wish;
+    await this.worker.setContinueWish(wish);
+    this.emit({ continueWish: wish });
+  }
+
+  getContinueWish(): boolean {
+    return this.continueWish;
   }
 
   protected emit(partial: Partial<GameSnapshot>): void {
@@ -127,6 +147,7 @@ export class PokerGameController {
         message: `connecting ${opts.relayUrl}`,
       });
       await this.worker.newHand();
+      await this.worker.setContinueWish(this.continueWish);
 
       this.relay = new RelayClient(opts.relayUrl);
       await this.relay.connect({
@@ -189,6 +210,7 @@ export class PokerGameController {
       });
 
       await this.worker.newHand();
+      await this.worker.setContinueWish(this.continueWish);
       const sessionPubkeyHex = bytesToHex(await this.worker.localPubkey());
 
       const intentTx = await requester.sendMessage(

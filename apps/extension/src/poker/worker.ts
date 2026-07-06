@@ -61,6 +61,8 @@ async function handle(cmd: string, args: any): Promise<any> {
       );
     case "setChainSeats":
       return hand.setChainSeats(args.playerA, args.playerB);
+    case "setContinueWish":
+      return hand.setContinueWish(!!args.wish);
     case "buildSessionResult":
       return hand.buildSessionResult(
         args.chainSessionId,

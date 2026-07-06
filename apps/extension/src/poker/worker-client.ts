@@ -72,6 +72,9 @@ export class PokerWorkerClient {
   setChainSeats(playerA: string, playerB: string): Promise<void> {
     return this.call("setChainSeats", { playerA, playerB });
   }
+  setContinueWish(wish: boolean): Promise<void> {
+    return this.call("setContinueWish", { wish });
+  }
   buildSessionResult(args: {
     chainSessionId: string;
     playerA: string;

@@ -228,8 +228,10 @@ const PokerPage: React.FC = () => {
       {t?.ready ? (
         <div style={styles.block}>
           <b>
-            Table — {PHASE_NAMES[t.phase ?? 0]} · pot {t.pot}
+            Hand {t.handNumber ?? 1} — {PHASE_NAMES[t.phase ?? 0]} · pot {t.pot}
             {t.currentBet ? ` · bet ${t.currentBet}` : ""}
+            {t.dealing ? " · dealing…" : ""}
+            {t.button === me ? " · you have the button" : ""}
           </b>
           <div>
             board: <Cards cards={t.communityCards} empty="(no cards yet)" />
@@ -246,6 +248,24 @@ const PokerPage: React.FC = () => {
             {t.players?.[peer]?.folded ? ", folded" : ""}):{" "}
             <Cards cards={t.peerHoleCards} empty="🂠 🂠" />
           </div>
+
+          {snapshot.stage === "playing" ? (
+            <div style={{ marginTop: "0.4rem" }}>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={snapshot.continueWish ?? true}
+                  onChange={(e) =>
+                    void controller.setContinueWish(e.target.checked)
+                  }
+                />{" "}
+                Play another hand after this one
+                {snapshot.continueWish === false
+                  ? " (leaving after this hand)"
+                  : ""}
+              </label>
+            </div>
+          ) : null}
 
           {snapshot.stage === "playing" ? (
             <div style={{ ...styles.row, marginTop: "0.5rem" }}>
