@@ -95,6 +95,8 @@ const handleBitpokerSubmitResultMsg: (
       transcriptHash: msg.transcriptHash,
       resultSignature: msg.resultSignature,
       splitPot: msg.splitPot,
+      playerAAmount: msg.playerAAmount,
+      playerBAmount: msg.playerBAmount,
     });
   };
 };

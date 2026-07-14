@@ -91,7 +91,9 @@ export class BitpokerSubmitResultMsg extends Message<{
     public readonly finalStake: string,
     public readonly transcriptHash: string,
     public readonly resultSignature: string,
-    public readonly splitPot: boolean
+    public readonly splitPot: boolean,
+    public readonly playerAAmount: string,
+    public readonly playerBAmount: string
   ) {
     super();
   }
@@ -108,6 +110,14 @@ export class BitpokerSubmitResultMsg extends Message<{
     }
     if (!/^[0-9a-f]+$/.test(this.resultSignature)) {
       throw new Error("result signature must be hex");
+    }
+    // The chain settles on these amounts, so a malformed pair would either be
+    // rejected on chain or, worse, pay the wrong seat: require decimals here.
+    if (
+      !/^[0-9]+$/.test(this.playerAAmount) ||
+      !/^[0-9]+$/.test(this.playerBAmount)
+    ) {
+      throw new Error("player amounts must be decimal integers");
     }
   }
 

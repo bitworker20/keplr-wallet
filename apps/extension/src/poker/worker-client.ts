@@ -91,6 +91,8 @@ export class PokerWorkerClient {
     finalStake?: string;
     transcriptHash?: string;
     resultSignature?: string;
+    playerAAmount?: string;
+    playerBAmount?: string;
   }> {
     return this.call("buildSessionResult", args);
   }

@@ -106,6 +106,8 @@ export function encodeMsgSubmitSessionResult(msg: {
   transcriptHash: string;
   resultSignature: string;
   splitPot: boolean;
+  playerAAmount: string;
+  playerBAmount: string;
 }): Uint8Array {
   return new ProtoWriter()
     .string(1, msg.creator)
@@ -116,6 +118,8 @@ export function encodeMsgSubmitSessionResult(msg: {
     .string(6, msg.transcriptHash)
     .string(7, msg.resultSignature)
     .bool(8, msg.splitPot)
+    .uint64(9, msg.playerAAmount)
+    .uint64(10, msg.playerBAmount)
     .finish();
 }
 

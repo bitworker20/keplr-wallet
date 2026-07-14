@@ -164,6 +164,8 @@ export class BitpokerService {
       transcriptHash: string;
       resultSignature: string;
       splitPot: boolean;
+      playerAAmount: string;
+      playerBAmount: string;
     }
   ): Promise<{ txHash: string; code: number; rawLog: string }> {
     if (!env.isInternalMsg) {
@@ -179,6 +181,8 @@ export class BitpokerService {
       transcriptHash: args.transcriptHash,
       resultSignature: args.resultSignature,
       splitPot: args.splitPot,
+      playerAAmount: args.playerAAmount,
+      playerBAmount: args.playerBAmount,
     });
     return this.broadcastPokerMsg(
       chainId,

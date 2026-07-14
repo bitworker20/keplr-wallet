@@ -481,7 +481,9 @@ export class PokerGameController {
           result.finalStake ?? "0",
           result.transcriptHash ?? "",
           result.resultSignature ?? "",
-          result.splitPot ?? false
+          result.splitPot ?? false,
+          result.playerAAmount ?? "0",
+          result.playerBAmount ?? "0"
         )
       );
       if (tx.code !== 0) {
