@@ -30,6 +30,7 @@ import {
   fetchUchipBalance,
   localGameName,
 } from "./poker/lobby";
+import { formatChip } from "./poker/chip";
 import { styles } from "./poker/ui/styles";
 import { ThTable } from "./poker/ui/th-table";
 import { ZjhTable } from "./poker/ui/zjh-table";
@@ -63,7 +64,6 @@ const PokerPage: React.FC = () => {
     stake: "100",
   });
   const [game, setGame] = useState<PokerGame>("TH");
-  const [betAmount, setBetAmount] = useState("0");
 
   // Wallet identity + spendable balance for the lobby/create flow. Loaded
   // lazily: the wallet may be locked when the page opens.
@@ -178,8 +178,8 @@ const PokerPage: React.FC = () => {
     });
   };
 
-  const act = (kind: number) => {
-    void controller.act(kind, parseInt(betAmount, 10) || 0);
+  const act = (kind: number, amount?: number) => {
+    void controller.act(kind, amount ?? 0);
   };
 
   const t = snapshot.table;
@@ -192,13 +192,15 @@ const PokerPage: React.FC = () => {
     me,
     peer,
     myTurn,
-    matched: snapshot.matched,
-    stage: snapshot.stage,
+    snapshot,
     continueWish: snapshot.continueWish ?? true,
-    betAmount,
-    setBetAmount,
     act,
     setContinueWish: (w: boolean) => void controller.setContinueWish(w),
+    // Chain sessions play in uchip; render as CHIP. Dev relay-direct chips
+    // are arbitrary units — leave them as plain numbers.
+    fmt: snapshot.chain
+      ? (amount: number) => formatChip(amount)
+      : (amount: number) => String(amount),
   };
 
   return (

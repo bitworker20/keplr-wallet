@@ -422,10 +422,30 @@ export class PokerGameController {
       if (frame.type === RelayType.StreamData && this.matched) {
         await this.applyEffect(await this.worker.onPeerFrame(frame.payload));
         await this.refresh();
+        // Frame pacing: hold each rendered peer move on screen for a beat so
+        // fast opponents (native robots settle a street in milliseconds) stay
+        // followable. Safe against the 30s disconnect detector: relay-client
+        // buffers inbound frames in an awaitable queue, so nextFrame's timer
+        // measures real peer silence, not our UI hold. Shuffle/key-exchange
+        // bursts (dealing) are not paced — nothing visible changes per frame.
+        const table = this.snapshot.table;
+        if (table?.ready && !table.dealing && this.snapshot.wait === 1) {
+          await this.hold(PokerGameController.PEER_FRAME_HOLD_MS);
+        }
         continue;
       }
       // Settlement/Chat/duplicate announcements are not the hand's concern.
     }
+  }
+
+  protected static readonly PEER_FRAME_HOLD_MS = 850;
+  protected static readonly SETTLE_HOLD_MS = 2600;
+
+  protected async hold(ms: number): Promise<void> {
+    if (!this.running) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   protected async applyEffect(eff: HandEffect): Promise<void> {
@@ -437,6 +457,11 @@ export class PokerGameController {
     }
     this.emit({ wait: eff.wait });
     if (eff.wait === 2) {
+      // Let the showdown reveal + result banner land before result submission
+      // / settle polling takes over the status line. Per hand-end, so the
+      // extra beat is invisible next to the chain's 1s poll cadence.
+      await this.refresh();
+      await this.hold(PokerGameController.SETTLE_HOLD_MS);
       await this.finish();
     }
   }

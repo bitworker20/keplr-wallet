@@ -59,6 +59,11 @@ export interface TableState {
   handsPlayed?: number;
   continueWish?: boolean;
   dealing?: boolean;
+  // Session standings carried across hands, in MATCHMAKING seat order
+  // (updated at each hand's settlement). Cumulative session results — and,
+  // for ZJH, the stack figure (session chips - committed) bet bounds need.
+  sessionFirstChips?: number;
+  sessionSecondChips?: number;
   // ZJH-specific
   ante?: number;
   currentDarkBet?: number;
