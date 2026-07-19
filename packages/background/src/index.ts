@@ -339,7 +339,8 @@ export function init(
   const bitpokerService = new Bitpoker.BitpokerService(
     keyRingV2Service,
     chainsService,
-    backgroundTxService
+    backgroundTxService,
+    interactionService
   );
 
   Interaction.init(router, interactionService);

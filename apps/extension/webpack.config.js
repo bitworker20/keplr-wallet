@@ -197,6 +197,10 @@ module.exports = {
       KEPLR_EXT_EIP6963_PROVIDER_INFO_ICON: keplrLogoBase64,
       KEPLR_EXT_STARKNET_PROVIDER_INFO_ID: "keplr",
       KEPLR_EXT_STARKNET_PROVIDER_INFO_NAME: "Keplr",
+      // Dev/e2e only: skip the bitpoker intent approval popup ("1" enables).
+      // The service additionally requires NODE_ENV !== "production", so store
+      // builds cannot bypass the approval regardless of this value.
+      KEPLR_EXT_BITPOKER_AUTO_APPROVE: "",
       KEPLR_EXT_STARKNET_PROVIDER_INFO_ICON: keplrLogoBase64,
       SKIP_API_KEY: "",
       KEPLR_EXT_PROVIDER_META_ID: "",

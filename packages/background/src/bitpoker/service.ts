@@ -13,6 +13,8 @@ import { simpleFetch } from "@keplr-wallet/simple-fetch";
 import { KeyRingService } from "../keyring";
 import { ChainsService } from "../chains";
 import { BackgroundTxService } from "../tx";
+import { InteractionService } from "../interaction";
+import { withApprovalPopup } from "./popup-env";
 import {
   encodeMsgOpenGameIntent,
   encodeMsgSubmitSessionEvidence,
@@ -44,11 +46,19 @@ const ALLOWED_PAYLOAD_PREFIXES = [
   "bitpoker-session-evidence-v1\n",
 ];
 
+// Dev/e2e escape hatch: skip the interactive intent approval. Substituted by
+// the extension's EnvironmentPlugin; honored only on non-production builds so
+// a store build physically cannot bypass the popup.
+const BITPOKER_AUTO_APPROVE =
+  process.env["NODE_ENV"] !== "production" &&
+  process.env["KEPLR_EXT_BITPOKER_AUTO_APPROVE"] === "1";
+
 export class BitpokerService {
   constructor(
     protected readonly keyRingService: KeyRingService,
     protected readonly chainsService: ChainsService,
-    protected readonly txService: BackgroundTxService
+    protected readonly txService: BackgroundTxService,
+    protected readonly interactionService: InteractionService
   ) {}
 
   static isAllowedPayload(payload: string): boolean {
@@ -118,10 +128,14 @@ export class BitpokerService {
     };
   }
 
-  // DEV NOTE: session-flow txs are signed directly with the selected key,
-  // without the interactive sign approval — the same trust model as the native
-  // CLI client's key. The intent tx locks funds, so gating it behind a normal
-  // Keplr sign interaction is a planned follow-up before any non-dev build.
+  // Approval boundary: openIntent is the ONLY session-flow tx that locks
+  // funds (a matched intent escrows the stake), so it alone goes through an
+  // interactive Keplr approval popup. submitResult / submitEvidence /
+  // submitSecret and the raw relay-hello signs stay direct-signed: they never
+  // lock new funds (they release or defend escrow already at stake) and they
+  // run inside the protocol's 30s frame-timeout / dispute-deadline windows
+  // where a popup would forfeit the hand. All of them remain fenced by
+  // env.isInternalMsg and (for raw signs) the domain-prefix allowlist.
   async openIntent(
     env: Env,
     chainId: string,
@@ -137,6 +151,46 @@ export class BitpokerService {
       throw new Error("bitpoker tx is only allowed for internal messages");
     }
     const { bech32Address } = await this.getKey(env, chainId);
+    const broadcast = () =>
+      this.broadcastOpenIntent(chainId, bech32Address, args);
+
+    if (BITPOKER_AUTO_APPROVE) {
+      console.warn(
+        "bitpoker: KEPLR_EXT_BITPOKER_AUTO_APPROVE is set — skipping the " +
+          "interactive intent approval (dev/e2e builds only)"
+      );
+      return broadcast();
+    }
+
+    return await this.interactionService.waitApproveV2(
+      withApprovalPopup(env),
+      "/bitpoker/approve-intent",
+      "bitpoker-open-intent",
+      {
+        chainId,
+        gameType: args.gameType || POKERCHAIN_GAME_TYPE_TH,
+        minStake: args.minStake,
+        maxStake: args.maxStake,
+        opponent: args.opponent,
+        signer: bech32Address,
+      },
+      // Two-phase (interaction.md): approval resolves the wait first, THEN
+      // the fund-locking broadcast runs.
+      () => broadcast()
+    );
+  }
+
+  protected async broadcastOpenIntent(
+    chainId: string,
+    bech32Address: string,
+    args: {
+      gameType: number;
+      minStake: string;
+      maxStake: string;
+      opponent: string;
+      playerSessionPubkey: string;
+    }
+  ): Promise<{ txHash: string; code: number; rawLog: string }> {
     const msg = encodeMsgOpenGameIntent({
       creator: bech32Address,
       gameType: args.gameType || POKERCHAIN_GAME_TYPE_TH,

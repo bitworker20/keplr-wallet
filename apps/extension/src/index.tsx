@@ -52,6 +52,7 @@ import { SettingSecurityPage } from "./pages/setting/security";
 import { SettingSecurityPermissionPage } from "./pages/setting/security/permission";
 import { PermissionPage } from "./pages/permission";
 import { SignCosmosADR36Page, SignCosmosTxPage } from "./pages/sign/cosmos";
+import { BitpokerApproveIntentPage } from "./pages/bitpoker/approve-intent";
 import { SettingTokenListPage } from "./pages/setting/token/manage";
 import { SettingTokenAddPage } from "./pages/setting/token/add";
 import { SettingGeneralLanguagePage } from "./pages/setting/general/language";
@@ -515,6 +516,10 @@ const RoutesAfterReady: FunctionComponent = observer(() => {
               <Route path="/permission" element={<PermissionPage />} />
               <Route path="/switch-account" element={<SwitchAccountPage />} />
               <Route path="/sign-cosmos" element={<SignCosmosTxPage />} />
+              <Route
+                path="/bitpoker/approve-intent"
+                element={<BitpokerApproveIntentPage />}
+              />
               <Route
                 path="/sign-cosmos-adr36"
                 element={<SignCosmosADR36Page />}
