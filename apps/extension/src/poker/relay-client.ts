@@ -3,8 +3,10 @@
 // frame header, the protobuf ClientHello, and an awaitable inbound frame queue
 // over a standard WebSocket. Zero dependencies.
 //
-// Auth: unsigned-dev for now. The cosmos-signature-v1 path will sign the hello
-// via the background BitpokerSignPayloadMsg when on-chain matchmaking lands.
+// Auth: the dev relay-direct flow sends unsigned-dev hellos (the default when
+// connect() gets no authScheme); chain sessions pass authScheme
+// "cosmos-signature-v1" with a signature obtained via the background
+// BitpokerSignPayloadMsg (see controller.joinChain).
 
 export enum RelayType {
   ClientHello = 1,

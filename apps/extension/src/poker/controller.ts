@@ -65,7 +65,16 @@ export interface ChainJoinOptions {
   lcdUrl: string;
   chainId: string;
   playerName: string;
-  stake: string; // decimal, escrow denom units
+  // Legacy single-stake form (min = max = stake). Ignored when
+  // minStakeUchip/maxStakeUchip are given.
+  stake?: string; // decimal, uchip
+  // Stake range in uchip (uint64-as-string). The chain matches two intents
+  // whose ranges overlap; the session's actual stake comes from the match.
+  minStakeUchip?: string;
+  maxStakeUchip?: string;
+  // "" or "ANY" = open matchmaking; a bech32 address = private challenge
+  // (also how the lobby joins: opponent = the listed intent's creator).
+  opponent?: string;
   game?: PokerGame;
 }
 
@@ -222,15 +231,19 @@ export class PokerGameController {
       await this.worker.setContinueWish(this.continueWish);
       const sessionPubkeyHex = bytesToHex(await this.worker.localPubkey());
 
+      const minStake = opts.minStakeUchip ?? opts.stake ?? "0";
+      const maxStake = opts.maxStakeUchip ?? opts.stake ?? "0";
+      const opponent =
+        !opts.opponent || opts.opponent === "ANY" ? "" : opts.opponent;
       const intentTx = await requester.sendMessage(
         BACKGROUND_PORT,
         new BitpokerOpenIntentMsg(
           opts.chainId,
           // GameType: TH=3, ZJH=2 (pokerchain enum).
           this.game === "ZJH" ? 2 : 3,
-          opts.stake,
-          opts.stake,
-          "",
+          minStake,
+          maxStake,
+          opponent,
           sessionPubkeyHex
         )
       );
@@ -325,7 +338,10 @@ export class PokerGameController {
         nonce,
       });
 
-      const stake = parseInt(opts.stake, 10);
+      // The matched session's stake is authoritative (a range intent can match
+      // anywhere inside the overlap) — the in-game chips must mirror it on
+      // both seats or the announcements disagree.
+      const stake = parseInt(String(session.stake), 10);
       this.announcement = await this.worker.buildAnnouncement({
         name: opts.playerName,
         game: this.game,

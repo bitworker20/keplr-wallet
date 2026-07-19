@@ -1,29 +1,41 @@
 // BitPoker game page (chrome-extension://<id>/poker.html).
 //
 // Plays heads-up Texas Hold'em OR ZhaJinHua (three-card brag) against a peer
-// over a BitPoker relay — pick the game in the join form. Both run the same
-// flow: announcement matchmaking, mental-poker shuffle, betting driven by the
-// action bar, showdown, the signed settlement handshake, multi-hand
-// continuation, and (on-chain) escrowed settlement / dispute submission. The
-// gamecore wasm runs in a Web Worker (hand crypto blocks for seconds); this
-// page renders tableState() snapshots and forwards button presses. Wire- and
-// chain-compatible with a native GameSession peer (the bitpoker/test/interop
-// e2es prove both games, both peer orders, cooperative + dispute paths).
+// over a BitPoker relay. Both run the same flow: announcement matchmaking,
+// mental-poker shuffle, betting driven by the action bar, showdown, the
+// signed settlement handshake, multi-hand continuation, and (on-chain)
+// escrowed settlement / dispute submission. The gamecore wasm runs in a Web
+// Worker (hand crypto blocks for seconds); this page renders tableState()
+// snapshots and forwards button presses. Wire- and chain-compatible with a
+// native GameSession peer (the bitpoker/test/interop e2es prove both games,
+// both peer orders, cooperative + dispute paths).
 //
 // Structure: this file is the orchestrator (forms + controller wiring); the
-// presentational pieces live in ./poker/ui/.
-import React, { useMemo, useRef, useState } from "react";
+// presentational pieces live in ./poker/ui/. Chain play starts from the
+// lobby (join a listed intent) or the create-game form; the legacy
+// single-stake quick panel stays at the bottom for the e2e driver.
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { InExtensionMessageRequester } from "@keplr-wallet/router-extension";
+import { BACKGROUND_PORT } from "@keplr-wallet/router";
+import { BitpokerGetKeyMsg } from "@keplr-wallet/background";
 import {
   GameSnapshot,
   PokerGameController,
   JoinOptions,
   PokerGame,
 } from "./poker/controller";
+import {
+  ChainGameIntent,
+  fetchUchipBalance,
+  localGameName,
+} from "./poker/lobby";
 import { styles } from "./poker/ui/styles";
 import { ThTable } from "./poker/ui/th-table";
 import { ZjhTable } from "./poker/ui/zjh-table";
 import { Diagnostics } from "./poker/ui/diagnostics";
+import { Lobby } from "./poker/ui/lobby";
+import { CreateGameForm, CreateGameSubmit } from "./poker/ui/create-game-form";
 
 const POKER_CHAIN_ID = "pokerchain-testnet-1";
 
@@ -52,6 +64,62 @@ const PokerPage: React.FC = () => {
   });
   const [game, setGame] = useState<PokerGame>("TH");
   const [betAmount, setBetAmount] = useState("0");
+
+  // Wallet identity + spendable balance for the lobby/create flow. Loaded
+  // lazily: the wallet may be locked when the page opens.
+  const [account, setAccount] = useState<{
+    address: string;
+    error?: string;
+  }>({ address: "" });
+  const [balanceUchip, setBalanceUchip] = useState("");
+
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const key = await new InExtensionMessageRequester().sendMessage(
+          BACKGROUND_PORT,
+          new BitpokerGetKeyMsg(POKER_CHAIN_ID)
+        );
+        if (alive) {
+          setAccount({ address: key.bech32Address });
+        }
+      } catch (e: any) {
+        if (alive) {
+          setAccount({ address: "", error: e?.message ?? String(e) });
+        }
+      }
+    };
+    void load();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!account.address) {
+      return;
+    }
+    let alive = true;
+    const load = async () => {
+      try {
+        const balance = await fetchUchipBalance(form.lcdUrl, account.address);
+        if (alive) {
+          setBalanceUchip(balance);
+        }
+      } catch {
+        if (alive) {
+          setBalanceUchip("");
+        }
+      }
+    };
+    void load();
+    const timer = setInterval(() => void load(), 5000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [account.address, form.lcdUrl]);
 
   const formLocked = !["idle", "error", "done", "disputed"].includes(
     snapshot.stage
@@ -84,23 +152,35 @@ const PokerPage: React.FC = () => {
     void controller.join(opts);
   };
 
+  const joinIntent = (intent: ChainGameIntent) => {
+    void controller.joinChain({
+      lcdUrl: form.lcdUrl,
+      chainId: POKER_CHAIN_ID,
+      playerName: form.playerName,
+      game: localGameName(intent.game_type),
+      minStakeUchip: intent.min_stake,
+      maxStakeUchip: intent.max_stake,
+      // Aiming the mirrored intent at the creator makes the chain pair the
+      // two — there is no separate join tx.
+      opponent: intent.creator,
+    });
+  };
+
+  const createGame = (submit: CreateGameSubmit) => {
+    void controller.joinChain({
+      lcdUrl: form.lcdUrl,
+      chainId: POKER_CHAIN_ID,
+      playerName: form.playerName,
+      game: submit.game,
+      minStakeUchip: submit.minStakeUchip,
+      maxStakeUchip: submit.maxStakeUchip,
+      opponent: submit.opponent,
+    });
+  };
+
   const act = (kind: number) => {
     void controller.act(kind, parseInt(betAmount, 10) || 0);
   };
-
-  const gameSelector = (
-    <div>
-      <span style={styles.label}>game</span>
-      <select
-        value={game}
-        onChange={(e) => setGame(e.target.value as PokerGame)}
-        disabled={formLocked}
-      >
-        <option value="TH">Texas Hold&apos;em</option>
-        <option value="ZJH">ZhaJinHua (三张)</option>
-      </select>
-    </div>
-  );
 
   const t = snapshot.table;
   const isZjh = t?.game === "ZJH";
@@ -126,17 +206,35 @@ const PokerPage: React.FC = () => {
       <h1>BitPoker</h1>
 
       <div style={styles.block}>
-        <b>Join a table</b>
-        {gameSelector}
-        {field("relayUrl", "relay url", "22rem")}
-        {field("relayId", "relay id")}
-        {field("sessionId", "session id")}
-        {field("playerName", "name")}
-        {field("minBet", "min bet")}
-        {field("maxBet", "max bet")}
-        <button onClick={join} disabled={formLocked}>
-          Join
-        </button>{" "}
+        <b>Play on-chain (pokerchain)</b>
+        {field("lcdUrl", "lcd url", "22rem")}
+        <div>
+          <span style={styles.label}>account</span>
+          {account.address ? (
+            <span>{account.address}</span>
+          ) : (
+            <span style={styles.err}>
+              {account.error ?? "loading…"} (unlock the wallet, then reload)
+            </span>
+          )}
+        </div>
+        <div style={{ margin: "0.5rem 0" }}>
+          <b>Open games</b>
+          <Lobby
+            lcdUrl={form.lcdUrl}
+            myAddress={account.address}
+            enabled={!formLocked && !!account.address}
+            onJoin={joinIntent}
+          />
+        </div>
+        <div style={{ margin: "0.5rem 0" }}>
+          <b>Create a game</b>
+          <CreateGameForm
+            enabled={!formLocked && !!account.address}
+            balanceUchip={balanceUchip}
+            onSubmit={createGame}
+          />
+        </div>
         <span
           style={
             snapshot.stage === "error"
@@ -149,26 +247,6 @@ const PokerPage: React.FC = () => {
         >
           [{snapshot.stage}] {snapshot.message}
         </span>
-      </div>
-
-      <div style={styles.block}>
-        <b>Play on-chain (pokerchain session)</b>
-        {field("lcdUrl", "lcd url", "22rem")}
-        {field("stake", "stake")}
-        <button
-          onClick={() =>
-            void controller.joinChain({
-              lcdUrl: form.lcdUrl,
-              chainId: POKER_CHAIN_ID,
-              playerName: form.playerName,
-              stake: form.stake,
-              game,
-            })
-          }
-          disabled={formLocked}
-        >
-          Play on-chain ({game})
-        </button>
         {snapshot.chain ? (
           <div data-testid="chain">
             {snapshot.chain.address ? `addr ${snapshot.chain.address} ` : ""}
@@ -191,6 +269,53 @@ const PokerPage: React.FC = () => {
 
       {t?.ready && isZjh ? <ZjhTable t={t} {...tableProps} /> : null}
       {t?.ready && !isZjh ? <ThTable t={t} {...tableProps} /> : null}
+
+      {/* Dev flows: relay-direct play (unsigned-dev auth, hand-shared session
+          id) and the legacy single-stake chain quick start the e2e driver
+          uses. Kept visible — puppeteer cannot click inside a collapsed
+          <details>. */}
+      <div style={styles.block}>
+        <b>Join a table (dev relay-direct)</b>
+        <div>
+          <span style={styles.label}>game</span>
+          <select
+            value={game}
+            onChange={(e) => setGame(e.target.value as PokerGame)}
+            disabled={formLocked}
+          >
+            <option value="TH">Texas Hold&apos;em</option>
+            <option value="ZJH">ZhaJinHua (三张)</option>
+          </select>
+        </div>
+        {field("relayUrl", "relay url", "22rem")}
+        {field("relayId", "relay id")}
+        {field("sessionId", "session id")}
+        {field("playerName", "name")}
+        {field("minBet", "min bet")}
+        {field("maxBet", "max bet")}
+        <button onClick={join} disabled={formLocked}>
+          Join
+        </button>
+      </div>
+
+      <div style={styles.block}>
+        <b>Play on-chain (legacy quick start)</b>
+        {field("stake", "stake")}
+        <button
+          onClick={() =>
+            void controller.joinChain({
+              lcdUrl: form.lcdUrl,
+              chainId: POKER_CHAIN_ID,
+              playerName: form.playerName,
+              stake: form.stake,
+              game,
+            })
+          }
+          disabled={formLocked}
+        >
+          Play on-chain ({game})
+        </button>
+      </div>
 
       <Diagnostics controller={controller} chainId={POKER_CHAIN_ID} />
     </div>
