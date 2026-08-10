@@ -86,6 +86,10 @@ export function encodeMsgOpenGameIntent(msg: {
   maxStake: string;
   opponent: string;
   playerSessionPubkey: string;
+  // ADR-007: hex of a 33-byte compressed secp256k1 transport pubkey the
+  // assigned relay encrypts this player's endpoint blob to. Empty on chains
+  // without the answer protocol.
+  playerTransportPubkey?: string;
 }): Uint8Array {
   return new ProtoWriter()
     .string(1, msg.creator)
@@ -94,6 +98,7 @@ export function encodeMsgOpenGameIntent(msg: {
     .uint64(4, msg.maxStake)
     .string(5, msg.opponent)
     .string(6, msg.playerSessionPubkey)
+    .string(7, msg.playerTransportPubkey ?? "")
     .finish();
 }
 

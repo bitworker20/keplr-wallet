@@ -145,6 +145,7 @@ export class BitpokerService {
       maxStake: string;
       opponent: string;
       playerSessionPubkey: string;
+      playerTransportPubkey?: string;
     }
   ): Promise<{ txHash: string; code: number; rawLog: string }> {
     if (!env.isInternalMsg) {
@@ -189,6 +190,7 @@ export class BitpokerService {
       maxStake: string;
       opponent: string;
       playerSessionPubkey: string;
+      playerTransportPubkey?: string;
     }
   ): Promise<{ txHash: string; code: number; rawLog: string }> {
     const msg = encodeMsgOpenGameIntent({
@@ -198,6 +200,7 @@ export class BitpokerService {
       maxStake: args.maxStake,
       opponent: args.opponent,
       playerSessionPubkey: args.playerSessionPubkey,
+      playerTransportPubkey: args.playerTransportPubkey,
     });
     return this.broadcastPokerMsg(
       chainId,

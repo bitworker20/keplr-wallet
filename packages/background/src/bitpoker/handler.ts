@@ -79,6 +79,7 @@ const handleBitpokerOpenIntentMsg: (
       maxStake: msg.maxStake,
       opponent: msg.opponent,
       playerSessionPubkey: msg.playerSessionPubkey,
+      playerTransportPubkey: msg.playerTransportPubkey,
     });
   };
 };

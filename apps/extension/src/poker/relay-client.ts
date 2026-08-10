@@ -187,12 +187,20 @@ export class RelayClient {
   protected requestId = 0;
   closed = false;
 
-  constructor(public readonly url: string) {}
+  constructor(
+    public readonly url: string,
+    // ADR-007 §3.2: offered subprotocols carrying the connect token
+    // ("xpoker.relay.v1" + "xpoker.tok.<base64url>"). Undefined = legacy
+    // handshake without subprotocols.
+    protected readonly subprotocols?: string[]
+  ) {}
 
   // Connects and authenticates: the ClientHello must be the first frame.
   async connect(hello: ClientHelloFields): Promise<void> {
     await new Promise<void>((resolve, reject) => {
-      const ws = new WebSocket(this.url);
+      const ws = this.subprotocols
+        ? new WebSocket(this.url, this.subprotocols)
+        : new WebSocket(this.url);
       ws.binaryType = "arraybuffer";
       ws.onopen = () => {
         this.ws = ws;

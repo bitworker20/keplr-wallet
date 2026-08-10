@@ -21,6 +21,13 @@ import {
   RelayClient,
   RelayType,
 } from "./relay-client";
+import {
+  RELAY_SUBPROTOCOL_V1,
+  base64ToBytes,
+  connectTokenSubprotocol,
+  generateTransportKeypair,
+  openEndpointBlob,
+} from "./endpoint-blob";
 import { PokerWorkerClient } from "./worker-client";
 import { HandEffect, MatchedResult, TableState } from "./types";
 
@@ -230,6 +237,10 @@ export class PokerGameController {
       await this.worker.newHand(this.game);
       await this.worker.setContinueWish(this.continueWish);
       const sessionPubkeyHex = bytesToHex(await this.worker.localPubkey());
+      // ADR-007: a fresh transport keypair per run; the pubkey is committed
+      // in the intent so the assigned relay can encrypt this player's
+      // endpoint blob to it. The secret never leaves this page.
+      const transport = generateTransportKeypair();
 
       const minStake = opts.minStakeUchip ?? opts.stake ?? "0";
       const maxStake = opts.maxStakeUchip ?? opts.stake ?? "0";
@@ -244,7 +255,8 @@ export class PokerGameController {
           minStake,
           maxStake,
           opponent,
-          sessionPubkeyHex
+          sessionPubkeyHex,
+          transport.pubkeyHex
         )
       );
       if (intentTx.code !== 0) {
@@ -285,9 +297,71 @@ export class PokerGameController {
         `/pokerchain/pokerchain/v1/sessions/${sessionId}`
       );
       const session = sessionRes.session;
-      const relayId: string = session.relay_assignment.primary_relay;
-      const relayRes = await lcd(`/pokerchain/pokerchain/v1/relays/${relayId}`);
-      const relayEndpoint: string = relayRes.relay.endpoint;
+
+      // ADR-007 §3.1: when the answer protocol is live, the endpoint arrives
+      // as an encrypted per-player blob on the session, not from the relay
+      // registry (which no longer carries endpoints at all).
+      let liveSession = session;
+      const answerDeadline = Number(
+        liveSession.relay_answer_deadline_height ?? "0"
+      );
+      const hasAnswer = (s: any): boolean =>
+        !!s.relay_endpoint_answer && !!s.relay_endpoint_answer.relay_id;
+      if (!hasAnswer(liveSession) && answerDeadline > 0) {
+        this.emit({
+          stage: "matching",
+          message: "waiting for the assigned relay to allocate an endpoint…",
+        });
+        for (; this.running; ) {
+          const latest = await lcd(
+            "/cosmos/base/tendermint/v1beta1/blocks/latest"
+          );
+          const height = Number(latest.block.header.height);
+          if (height >= answerDeadline) {
+            this.fail(
+              "no assigned relay answered before the deadline; " +
+                "the session can be voided for a full refund"
+            );
+            return;
+          }
+          liveSession = (
+            await lcd(`/pokerchain/pokerchain/v1/sessions/${sessionId}`)
+          ).session;
+          if (hasAnswer(liveSession)) {
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+        }
+        if (!this.running) {
+          return;
+        }
+      }
+
+      let relayId: string = session.relay_assignment.primary_relay;
+      let relayEndpoint = "";
+      let relaySubprotocols: string[] | undefined;
+      if (hasAnswer(liveSession)) {
+        const answer = liveSession.relay_endpoint_answer;
+        relayId = answer.relay_id;
+        const isPlayerA = session.player_a === address;
+        const grant = await openEndpointBlob(
+          transport.secretHex,
+          sessionId,
+          relayId,
+          base64ToBytes(isPlayerA ? answer.blob_a : answer.blob_b)
+        );
+        relayEndpoint = grant.endpoint;
+        relaySubprotocols = [
+          RELAY_SUBPROTOCOL_V1,
+          connectTokenSubprotocol(grant.connectToken),
+        ];
+      } else {
+        // Legacy chain: the registry still serves an endpoint.
+        const relayRes = await lcd(
+          `/pokerchain/pokerchain/v1/relays/${relayId}`
+        );
+        relayEndpoint = relayRes.relay.endpoint;
+      }
       this.chainSession = session;
       this.emit({
         chain: {
@@ -323,7 +397,7 @@ export class PokerGameController {
         new BitpokerSignPayloadMsg(opts.chainId, signText)
       );
 
-      this.relay = new RelayClient(relayEndpoint);
+      this.relay = new RelayClient(relayEndpoint, relaySubprotocols);
       await this.relay.connect({
         playerName: opts.playerName,
         networkAddress: address,

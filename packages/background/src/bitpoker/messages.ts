@@ -45,7 +45,10 @@ export class BitpokerOpenIntentMsg extends Message<{
     public readonly minStake: string,
     public readonly maxStake: string,
     public readonly opponent: string,
-    public readonly playerSessionPubkey: string
+    public readonly playerSessionPubkey: string,
+    // ADR-007 transport pubkey (hex, 33-byte compressed secp256k1); optional
+    // while chains without the answer protocol are supported.
+    public readonly playerTransportPubkey: string = ""
   ) {
     super();
   }
