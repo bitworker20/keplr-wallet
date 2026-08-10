@@ -320,6 +320,13 @@ const PokerPage: React.FC = () => {
       </div>
 
       <Diagnostics controller={controller} chainId={POKER_CHAIN_ID} />
+
+      {/* The card faces are third-party artwork under LGPL-3.0; the licence
+          requires the attribution to be visible in the shipped app. */}
+      <div style={{ marginTop: "1rem", fontSize: "0.7rem", opacity: 0.55 }}>
+        Card faces: Vector Playing Cards 3.2 by Chris Aguilar, licensed under
+        LGPL-3.0.
+      </div>
     </div>
   );
 };
