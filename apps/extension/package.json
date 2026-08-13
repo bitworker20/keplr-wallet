@@ -7,6 +7,7 @@
   "scripts": {
     "clean": "rm -rf node_modules; rm -rf dist; rm -rf build",
     "build": "npx cross-env NODE_ENV=production BUILD_OUTPUT=build/manifest-v3 webpack && npx cross-env NODE_ENV=production BUILD_MANIFEST_V2=true BUILD_OUTPUT=build/manifest-v2 webpack && npx zx ./scripts/post-build.mjs",
+    "build:chrome": "npx cross-env NODE_ENV=production BUILD_OUTPUT=build/manifest-v3 webpack",
     "build:noop": "npx tsc -p tsconfig.noop.json",
     "dev": "npx cross-env NODE_ENV=development webpack",
     "dev:analyzer": "npx cross-env NODE_ENV=development ANALYZER=true webpack",

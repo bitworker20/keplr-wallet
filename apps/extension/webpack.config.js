@@ -13,10 +13,18 @@ const isBuildManifestV2 = process.env.BUILD_MANIFEST_V2 === "true";
 const isEnvDevelopment = process.env.NODE_ENV !== "production";
 const isDisableSplitChunks = process.env.DISABLE_SPLIT_CHUNKS === "true";
 const isEnvAnalyzer = process.env.ANALYZER === "true";
+// The poker page, its session controller, relay client and gamecore worker are
+// shared verbatim with the standalone BitPoker web client, so they live in the
+// monorepo (outside this submodule) and both builds compile the same sources.
+// Consequence to be aware of: this submodule no longer builds on its own — it
+// needs the parent repo checked out alongside it.
+const POKER_CORE_DIR = path.resolve(__dirname, "../../../webapp/src/poker");
+const POKER_ASSETS_DIR = path.resolve(__dirname, "../../../webapp/public");
 const commonResolve = (dir) => ({
   extensions: [".ts", ".tsx", ".js", ".jsx"],
   alias: {
     assets: path.resolve(__dirname, dir),
+    "@bitpoker/poker-core": POKER_CORE_DIR,
   },
 });
 const altResolve = () => {
@@ -62,7 +70,7 @@ module.exports = {
     blocklist: ["./src/pages/blocklist/index.tsx"],
     ledgerGrant: ["./src/ledger-grant.tsx"],
     poker: ["./src/poker.tsx"],
-    pokerWorker: ["./src/poker/worker.ts"],
+    pokerWorker: [path.join(POKER_CORE_DIR, "worker.ts")],
     background: ["./src/background/background.ts"],
     contentScripts: ["./src/content-scripts/content-scripts.ts"],
     injectedScript: ["./src/content-scripts/inject/injected-script.ts"],
@@ -233,16 +241,26 @@ module.exports = {
           from: "../../node_modules/webextension-polyfill/dist/browser-polyfill.js",
           to: "./",
         },
-        // BitPoker gamecore (emscripten): vendored artifacts loaded at runtime
-        // by poker.tsx as a classic script + wasm fetch, so webpack does not
-        // parse the emscripten glue. Regenerate via bitpoker/wasm/build_and_test.sh.
+        // BitPoker runtime assets, shared with the standalone web client the
+        // same way the sources are: one copy lives in the monorepo's
+        // webapp/public and both builds stage it at their own root.
+        //
+        // gamecore is emscripten output loaded as a classic script + wasm
+        // fetch, so webpack never parses the glue. Regenerate via
+        // bitpoker/wasm/build_and_test.sh.
         {
-          from: "./src/vendor/bitpoker/gamecore.js",
+          from: path.resolve(POKER_ASSETS_DIR, "gamecore.js"),
           to: "./",
         },
         {
-          from: "./src/vendor/bitpoker/gamecore.wasm",
+          from: path.resolve(POKER_ASSETS_DIR, "gamecore.wasm"),
           to: "./",
+        },
+        // The card faces are addressed by plain URL (see poker/ui/cards.tsx),
+        // so they must land under <root>/cards/ rather than being bundled.
+        {
+          from: path.resolve(POKER_ASSETS_DIR, "cards"),
+          to: "./cards",
         },
       ],
     }),
