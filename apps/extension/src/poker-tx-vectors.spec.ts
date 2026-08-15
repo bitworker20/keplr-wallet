@@ -4,12 +4,12 @@
 // the standalone web client signs in the page (webapp/src/wallet/chain-tx.ts).
 // They cannot share the encoder file: the background package compiles with
 // `rootDir: "src"`, so it cannot include sources from outside itself. Instead
-// both are pinned to one fixture — the golden vectors below, which live with
-// the shared poker sources and are asserted by the web client's spec too.
+// both are pinned to one fixture — the golden vectors below, which ship with
+// the shared session package and are asserted by the web client's spec too.
 //
 // If a pokerchain proto changes a field number or type, update the fixture and
 // BOTH encoders; whichever one lags will fail here or there.
-import vectors from "../../../../webapp/src/poker/chain-tx-vectors.json";
+import vectors from "@bitpoker/poker-session/fixtures/chain-tx-vectors.json";
 import {
   encodeMsgOpenGameIntent,
   encodeMsgSubmitSessionEvidence,

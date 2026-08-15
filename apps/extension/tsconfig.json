@@ -11,17 +11,15 @@
     ],
     "baseUrl": ".",
     "paths": {
-      // Shared with the standalone web client; see webpack.config.js.
-      "@bitpoker/poker-core/*": ["../../../webapp/src/poker/*"],
-      // Those shared sources sit outside this submodule and next to the
-      // webapp's own node_modules, so without this TS would load a second copy
-      // of @types/react for them and then reject every shared component as
-      // "not a valid JSX element". Pin react to this workspace's copy.
-      "react": ["../../node_modules/@types/react"],
-      "react/*": ["../../node_modules/@types/react/*"],
-      "react-dom": ["../../node_modules/@types/react-dom"],
-      "react-dom/*": ["../../node_modules/@types/react-dom/*"]
+      // The headless BitPoker session layer, vendored from the monorepo's
+      // webapp/packages/poker-session — see vendor/bitpoker-session/README.md
+      // and webpack.config.js. It is a copy rather than a path into the parent
+      // repo so this submodule builds on its own.
+      "@bitpoker/poker-session/fixtures/*": [
+        "./vendor/bitpoker-session/fixtures/*"
+      ],
+      "@bitpoker/poker-session/*": ["./vendor/bitpoker-session/src/*"]
     }
   },
-  "include": ["src/**/*", "../../../webapp/src/poker/**/*"]
+  "include": ["src/**/*", "vendor/bitpoker-session/src/**/*"]
 }

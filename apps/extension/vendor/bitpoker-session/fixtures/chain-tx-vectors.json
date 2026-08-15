@@ -1,0 +1,76 @@
+{
+  "openGameIntent": {
+    "input": {
+      "creator": "xpoker1uflvlfueyjkvpfmtgyzt6txskpqn3qchu5kqch",
+      "gameType": 3,
+      "minStake": "100",
+      "maxStake": "5000",
+      "opponent": "xpoker1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqzk3mn8",
+      "playerSessionPubkey": "02aabb",
+      "playerTransportPubkey": "03ccdd"
+    },
+    "hex": "0a2d78706f6b65723175666c766c667565796a6b7670666d7467797a74367478736b70716e3371636875356b716368100318642088272a2d78706f6b65723171717171717171717171717171717171717171717171717171717171717171717a6b336d6e3832063032616162623a06303363636464"
+  },
+  "openGameIntentOpenMatch": {
+    "input": {
+      "creator": "xpoker1uflvlfueyjkvpfmtgyzt6txskpqn3qchu5kqch",
+      "gameType": 2,
+      "minStake": "0",
+      "maxStake": "1",
+      "opponent": "",
+      "playerSessionPubkey": "02aabb",
+      "playerTransportPubkey": ""
+    },
+    "hex": "0a2d78706f6b65723175666c766c667565796a6b7670666d7467797a74367478736b70716e3371636875356b716368100220013206303261616262"
+  },
+  "submitSessionResult": {
+    "input": {
+      "creator": "xpoker1uflvlfueyjkvpfmtgyzt6txskpqn3qchu5kqch",
+      "sessionId": "42",
+      "winner": "xpoker1uflvlfueyjkvpfmtgyzt6txskpqn3qchu5kqch",
+      "loser": "xpoker1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqzk3mn8",
+      "finalStake": "5000",
+      "transcriptHash": "deadbeef",
+      "resultSignature": "cafe",
+      "splitPot": false,
+      "playerAAmount": "7000",
+      "playerBAmount": "3000"
+    },
+    "hex": "0a2d78706f6b65723175666c766c667565796a6b7670666d7467797a74367478736b70716e3371636875356b716368102a1a2d78706f6b65723175666c766c667565796a6b7670666d7467797a74367478736b70716e3371636875356b716368222d78706f6b65723171717171717171717171717171717171717171717171717171717171717171717a6b336d6e38288827320864656164626565663a046361666548d83650b817"
+  },
+  "submitSessionResultSplit": {
+    "input": {
+      "creator": "xpoker1uflvlfueyjkvpfmtgyzt6txskpqn3qchu5kqch",
+      "sessionId": "9007199254740993",
+      "winner": "",
+      "loser": "",
+      "finalStake": "0",
+      "transcriptHash": "",
+      "resultSignature": "",
+      "splitPot": true,
+      "playerAAmount": "5000",
+      "playerBAmount": "5000"
+    },
+    "hex": "0a2d78706f6b65723175666c766c667565796a6b7670666d7467797a74367478736b70716e3371636875356b7163681081808080808080104001488827508827"
+  },
+  "submitSessionEvidence": {
+    "input": {
+      "creator": "xpoker1uflvlfueyjkvpfmtgyzt6txskpqn3qchu5kqch",
+      "sessionId": "42",
+      "evidenceHash": "abc123",
+      "evidencePayloadHex": "00ff10",
+      "evidenceSignature": "5566",
+      "reason": "connection-lost"
+    },
+    "hex": "0a2d78706f6b65723175666c766c667565796a6b7670666d7467797a74367478736b70716e3371636875356b716368102a1a06616263313233220300ff102a0435353636320f636f6e6e656374696f6e2d6c6f7374"
+  },
+  "submitSessionSecret": {
+    "input": {
+      "creator": "xpoker1uflvlfueyjkvpfmtgyzt6txskpqn3qchu5kqch",
+      "sessionId": "42",
+      "sessionSecretKeyHex": "0102030405",
+      "sessionPubkeyHex": "0a0b0c"
+    },
+    "hex": "0a2d78706f6b65723175666c766c667565796a6b7670666d7467797a74367478736b70716e3371636875356b716368102a1a05010203040522030a0b0c"
+  }
+}

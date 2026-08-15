@@ -27,3 +27,6 @@ noop-keplr-wallet-private/build
 yarn.lock
 
 noop-alt-sign-in
+
+# Vendored generated artifacts (BitPoker gamecore, emscripten output)
+vendor/bitpoker-session/assets/

@@ -46,4 +46,4 @@ android
 ios
 
 # Vendored generated artifacts (BitPoker gamecore, emscripten output)
-apps/extension/src/vendor/
+apps/extension/vendor/bitpoker-session/assets/

@@ -25,7 +25,7 @@ import {
   SubmitEvidenceArgs,
   SubmitResultArgs,
   SubmitSecretArgs,
-} from "@bitpoker/poker-core/wallet-bridge";
+} from "@bitpoker/poker-session/wallet-bridge";
 
 export class ExtensionWalletBridge implements PokerWalletBridge {
   protected readonly requester = new InExtensionMessageRequester();

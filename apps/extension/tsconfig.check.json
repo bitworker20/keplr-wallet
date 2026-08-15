@@ -2,17 +2,17 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "baseUrl": ".",
-    "rootDir": "../../..",
+    // The repo root: every checked source is inside this submodule again now
+    // that the BitPoker session layer is vendored rather than read from the
+    // parent monorepo.
+    "rootDir": "../..",
     "noEmit": true,
     "skipLibCheck": true,
     "paths": {
-      "@bitpoker/poker-core/*": ["../../../webapp/src/poker/*"],
-      // See tsconfig.json — keeps the shared poker sources on this
-      // workspace's @types/react instead of the webapp's copy.
-      "react": ["../../node_modules/@types/react"],
-      "react/*": ["../../node_modules/@types/react/*"],
-      "react-dom": ["../../node_modules/@types/react-dom"],
-      "react-dom/*": ["../../node_modules/@types/react-dom/*"],
+      "@bitpoker/poker-session/fixtures/*": [
+        "./vendor/bitpoker-session/fixtures/*"
+      ],
+      "@bitpoker/poker-session/*": ["./vendor/bitpoker-session/src/*"],
       "@keplr-wallet/analytics": ["../../packages/analytics/src"],
       "@keplr-wallet/analytics/build/*": ["../../packages/analytics/src/*"],
       "@keplr-wallet/background": ["../../packages/background/src"],
@@ -124,6 +124,6 @@
   "include": [
     "src/**/*",
     "../../packages/*/src/**/*.d.ts",
-    "../../../webapp/src/poker/**/*"
+    "vendor/bitpoker-session/src/**/*"
   ]
 }
