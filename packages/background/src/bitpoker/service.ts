@@ -16,6 +16,15 @@ import { BackgroundTxService } from "../tx";
 import { InteractionService } from "../interaction";
 import { withApprovalPopup } from "./popup-env";
 import {
+  adjustGas,
+  Coin,
+  DEFAULT_GAS_ADJUSTMENT,
+  feeForGas,
+  fetchNodeGasPrice,
+  GasPrice,
+  simulateGasUsed,
+} from "./fees";
+import {
   encodeMsgOpenGameIntent,
   encodeMsgSubmitSessionEvidence,
   encodeMsgSubmitSessionResult,
@@ -45,6 +54,23 @@ const ALLOWED_PAYLOAD_PREFIXES = [
   // submit-session-evidence authentication (ADR-003)
   "bitpoker-session-evidence-v1\n",
 ];
+
+// Gas FLOORS for the poker messages, not fixed limits: a tx pays whichever is
+// larger, the simulated estimate or this.
+//
+// Simulation measures the state the chain is in now, and these messages change
+// branch depending on state that moves underneath them. Submitting a session
+// result simulates at ~86k gas (the "record it" branch) and executes at ~111k
+// once the peer's result has landed and it runs settlement. Running out of gas
+// there leaves the session RESULT_PENDING with the escrow locked, which costs
+// far more than overpaying a fraction of a CHIP. Evidence carries the full
+// message-history payload, so it pays a per-byte write cost.
+const GAS_FLOOR_GAME = "400000";
+const GAS_FLOOR_EVIDENCE = "3000000";
+
+// A simulated tx is never verified, but the signature slot must exist and be
+// the right length or the ante handler rejects the shape before measuring.
+const DUMMY_SIGNATURE = new Uint8Array(64);
 
 // Dev/e2e escape hatch: skip the interactive intent approval. Substituted by
 // the extension's EnvironmentPlugin; honored only on non-production builds so
@@ -206,7 +232,7 @@ export class BitpokerService {
       chainId,
       MSG_OPEN_GAME_INTENT_TYPE_URL,
       msg,
-      "400000"
+      GAS_FLOOR_GAME
     );
   }
 
@@ -245,7 +271,7 @@ export class BitpokerService {
       chainId,
       MSG_SUBMIT_SESSION_RESULT_TYPE_URL,
       msg,
-      "400000"
+      GAS_FLOOR_GAME
     );
   }
 
@@ -276,13 +302,11 @@ export class BitpokerService {
       evidenceSignature: args.evidenceSignature,
       reason: args.reason,
     });
-    // Evidence carries the full message-history payload, so it needs a high gas
-    // limit (per-byte write cost); the local dev chain has zero gas price.
     return this.broadcastPokerMsg(
       chainId,
       MSG_SUBMIT_SESSION_EVIDENCE_TYPE_URL,
       msg,
-      "3000000"
+      GAS_FLOOR_EVIDENCE
     );
   }
 
@@ -309,7 +333,7 @@ export class BitpokerService {
       chainId,
       MSG_SUBMIT_SESSION_SECRET_TYPE_URL,
       msg,
-      "400000"
+      GAS_FLOOR_GAME
     );
   }
 
@@ -317,7 +341,7 @@ export class BitpokerService {
     chainId: string,
     typeUrl: string,
     msgValue: Uint8Array,
-    gasLimit: string
+    gasFloor: string
   ): Promise<{ txHash: string; code: number; rawLog: string }> {
     const modularChainInfo =
       this.chainsService.getModularChainInfoOrThrow(chainId);
@@ -348,22 +372,41 @@ export class BitpokerService {
         messages: [{ typeUrl, value: msgValue }],
       })
     ).finish();
-    const authInfoBytes = AuthInfo.encode({
-      signerInfos: [
-        {
-          publicKey: {
-            typeUrl: "/cosmos.crypto.secp256k1.PubKey",
-            value: PubKey.encode({ key: pubKey.toBytes() }).finish(),
+
+    // Both halves of the fee come from the chain: the gas from simulating this
+    // exact tx, the price from the node's own config. See fees.ts.
+    const encodeAuthInfo = (gasLimit: string, amount: Coin[]): Uint8Array =>
+      AuthInfo.encode({
+        signerInfos: [
+          {
+            publicKey: {
+              typeUrl: "/cosmos.crypto.secp256k1.PubKey",
+              value: PubKey.encode({ key: pubKey.toBytes() }).finish(),
+            },
+            modeInfo: {
+              single: { mode: SignMode.SIGN_MODE_DIRECT },
+              multi: undefined,
+            },
+            sequence,
           },
-          modeInfo: {
-            single: { mode: SignMode.SIGN_MODE_DIRECT },
-            multi: undefined,
-          },
-          sequence,
-        },
-      ],
-      fee: Fee.fromPartial({ gasLimit }),
-    }).finish();
+        ],
+        fee: Fee.fromPartial({ gasLimit, amount }),
+      }).finish();
+
+    const feeDenom =
+      cosmosInfo.feeCurrencies?.[0]?.coinMinimalDenom ??
+      cosmosInfo.currencies?.[0]?.coinMinimalDenom;
+    const [gasLimit, gasPrice] = await Promise.all([
+      this.resolveGasLimit(
+        cosmosInfo.rest,
+        bodyBytes,
+        encodeAuthInfo("0", []),
+        gasFloor
+      ),
+      this.resolveGasPrice(cosmosInfo.rest, feeDenom),
+    ]);
+    const fee = gasPrice ? feeForGas(gasLimit, gasPrice) : undefined;
+    const authInfoBytes = encodeAuthInfo(gasLimit, fee ? [fee] : []);
     const signDocBytes = SignDoc.encode({
       bodyBytes,
       authInfoBytes,
@@ -416,5 +459,50 @@ export class BitpokerService {
       }
     }
     throw new Error(`tx ${txHash} was not included within 30s`);
+  }
+
+  // Gas from a simulated run of this exact tx, never below the caller's floor.
+  // A node that declines to simulate leaves the tx on the floor alone — what
+  // this service sent unconditionally before.
+  protected async resolveGasLimit(
+    rest: string,
+    bodyBytes: Uint8Array,
+    authInfoBytes: Uint8Array,
+    gasFloor: string
+  ): Promise<string> {
+    try {
+      const txBytes = TxRaw.encode({
+        bodyBytes,
+        authInfoBytes,
+        signatures: [DUMMY_SIGNATURE],
+      }).finish();
+      const used = await simulateGasUsed(
+        rest,
+        Buffer.from(txBytes).toString("base64")
+      );
+      return adjustGas(used, DEFAULT_GAS_ADJUSTMENT, Number(gasFloor));
+    } catch {
+      return gasFloor;
+    }
+  }
+
+  // Cached per endpoint: a node's minimum gas price comes from its app.toml
+  // and changes on restart, not between transactions.
+  protected gasPriceCache?: {
+    rest: string;
+    price: Promise<GasPrice | undefined>;
+  };
+
+  protected resolveGasPrice(
+    rest: string,
+    preferredDenom?: string
+  ): Promise<GasPrice | undefined> {
+    if (this.gasPriceCache?.rest !== rest) {
+      this.gasPriceCache = {
+        rest,
+        price: fetchNodeGasPrice(rest, preferredDenom),
+      };
+    }
+    return this.gasPriceCache.price;
   }
 }
