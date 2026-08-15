@@ -37,8 +37,13 @@ export interface Coin {
 // CLI's `--gas auto` defaults to (1.0 with a 0.4 adjustment on top).
 export const DEFAULT_GAS_ADJUSTMENT = 1.4;
 
-const DEC_PLACES = 18n;
-const DEC_ONE = 10n ** DEC_PLACES;
+// BigInt LITERALS (18n) are unavailable at this package's TS target — the
+// Keplr extension compiles these sources at ES2016 — so every bigint here is
+// built with the constructor. Same rule as endpoint-blob.ts.
+const DEC_PLACES = 18;
+const DEC_ONE = BigInt("1" + "0".repeat(DEC_PLACES));
+const BIG_ZERO = BigInt(0);
+const BIG_ONE = BigInt(1);
 
 // "0.025000000000000000uchip" -> { amount: "0.025", denom: "uchip" }
 // Also accepts a comma-separated list ("0.01uchip,0.5stake") and returns all.
@@ -146,13 +151,13 @@ export function feeForGas(
   price: GasPrice
 ): Coin | undefined {
   const units = decToUnits(price.amount);
-  if (units === 0n) {
+  if (units === BIG_ZERO) {
     return undefined;
   }
   const gas = BigInt(String(gasLimit));
   const product = gas * units;
-  const amount = (product + DEC_ONE - 1n) / DEC_ONE; // ceil
-  if (amount === 0n) {
+  const amount = (product + DEC_ONE - BIG_ONE) / DEC_ONE; // ceil
+  if (amount === BIG_ZERO) {
     return undefined;
   }
   return { denom: price.denom, amount: amount.toString() };
@@ -161,10 +166,7 @@ export function feeForGas(
 // "0.025" -> 25000000000000000n (18-decimal fixed point, as sdk.Dec stores it)
 function decToUnits(dec: string): bigint {
   const [whole, fraction = ""] = dec.split(".");
-  const padded = (fraction + "0".repeat(Number(DEC_PLACES))).slice(
-    0,
-    Number(DEC_PLACES)
-  );
+  const padded = (fraction + "0".repeat(DEC_PLACES)).slice(0, DEC_PLACES);
   return BigInt(whole || "0") * DEC_ONE + BigInt(padded || "0");
 }
 

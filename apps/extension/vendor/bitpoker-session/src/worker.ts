@@ -57,18 +57,19 @@ async function handle(cmd: string, args: any): Promise<any> {
   switch (cmd) {
     case "localPubkey":
       return hand.localPubkey();
-    case "buildAnnouncement":
-      return hand.buildAnnouncement(
+    case "buildSessionHello":
+      return hand.buildSessionHello(
         args.name,
-        args.game,
-        args.chip,
-        args.opponent,
-        args.minBet | 0,
-        args.maxBet | 0,
-        args.p2pAddr || ""
+        args.betAmount | 0,
+        args.accountAddress || ""
       );
     case "setChainSeats":
-      return hand.setChainSeats(args.playerA, args.playerB);
+      return hand.setChainSeats(
+        args.playerA,
+        args.playerB,
+        args.playerAPubkey,
+        args.playerBPubkey
+      );
     case "setContinueWish":
       return hand.setContinueWish(!!args.wish);
     case "buildSessionResult":
@@ -80,8 +81,8 @@ async function handle(cmd: string, args: any): Promise<any> {
         args.relayFee,
         args.localAddress
       );
-    case "onPeerAnnouncement":
-      return hand.onPeerAnnouncement(args.frame);
+    case "onPeerSessionHello":
+      return hand.onPeerSessionHello(args.frame);
     case "setSessionSeed":
       return hand.setSessionSeed(args.seed);
     case "start":

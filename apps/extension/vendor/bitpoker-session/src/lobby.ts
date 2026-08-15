@@ -27,17 +27,38 @@ export function localGameName(chainGameType: string): "TH" | "ZJH" | undefined {
   return undefined;
 }
 
+// GameIntentStatus.GAME_INTENT_STATUS_PENDING. Sent as the NUMBER, not the
+// name: pokerchaind's grpc-gateway parses enum query parameters with
+// strconv.ParseInt, so `?status=GAME_INTENT_STATUS_PENDING` comes back 400
+// ("invalid syntax") and the lobby stays empty with an error nobody reads as
+// "wrong query parameter". Responses still spell the enum out, which is what
+// isPending below re-checks.
+const INTENT_STATUS_PENDING = 1;
+const INTENT_STATUS_PENDING_NAME = "GAME_INTENT_STATUS_PENDING";
+
 export async function fetchOpenIntents(
   lcdUrl: string
 ): Promise<ChainGameIntent[]> {
   const res = await fetch(
-    `${lcdUrl}/pokerchain/pokerchain/v1/intents?status=GAME_INTENT_STATUS_PENDING`
+    `${lcdUrl}/pokerchain/pokerchain/v1/intents?status=${INTENT_STATUS_PENDING}`
   );
   if (!res.ok) {
     throw new Error(`LCD intents query: ${res.status}`);
   }
   const json = await res.json();
   return (json.intents ?? []) as ChainGameIntent[];
+}
+
+// Belt and braces on the query parameter above: an intent that is already
+// matched must never be offered as joinable, whatever the gateway did with
+// the filter.
+function isPending(intent: ChainGameIntent): boolean {
+  return (
+    intent.status === undefined ||
+    intent.status === "" ||
+    intent.status === INTENT_STATUS_PENDING_NAME ||
+    intent.status === String(INTENT_STATUS_PENDING)
+  );
 }
 
 // Which pending intents can `me` join? Mirrors the native/Qt lobby filter:
@@ -47,6 +68,9 @@ export function joinableIntents(
   me: string
 ): ChainGameIntent[] {
   return all.filter((intent) => {
+    if (!isPending(intent)) {
+      return false;
+    }
     if (intent.creator === me) {
       return false;
     }

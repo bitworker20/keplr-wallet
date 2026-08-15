@@ -2,6 +2,7 @@
 import { HandEffect, MatchedResult, TableState } from "./types";
 
 interface PendingCall {
+  cmd: string;
   resolve: (v: any) => void;
   reject: (e: Error) => void;
 }
@@ -23,7 +24,7 @@ export class PokerWorkerClient {
       if (ok) {
         call.resolve(result);
       } else {
-        call.reject(new Error(error));
+        call.reject(new Error(`gamecore ${call.cmd}: ${error}`));
       }
     };
     this.worker.onerror = (ev) => {
@@ -38,7 +39,7 @@ export class PokerWorkerClient {
   protected call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
     const id = ++this.seq;
     return new Promise<T>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      this.pending.set(id, { cmd, resolve, reject });
       this.worker.postMessage({ id, cmd, args: args ?? {} });
     });
   }
@@ -59,19 +60,31 @@ export class PokerWorkerClient {
   localPubkey(): Promise<Uint8Array> {
     return this.call("localPubkey");
   }
-  buildAnnouncement(args: {
+  // The session hello both seats exchange over relay frame 2: display name,
+  // the stake this seat plays for, and the account the chain seated it as.
+  buildSessionHello(args: {
     name: string;
-    game: string;
-    chip: string;
-    opponent: string;
-    minBet: number;
-    maxBet: number;
-    p2pAddr?: string;
+    betAmount: number;
+    accountAddress: string;
   }): Promise<Uint8Array> {
-    return this.call("buildAnnouncement", args);
+    return this.call("buildSessionHello", args);
   }
-  setChainSeats(playerA: string, playerB: string): Promise<void> {
-    return this.call("setChainSeats", { playerA, playerB });
+  // The two addresses AND the session pubkeys the chain has on record for
+  // them. The gamecore refuses to match a session hello whose pubkey differs
+  // from the chain's commitment, which is what stops a relay (or the peer)
+  // substituting a different session key after the intents are matched.
+  setChainSeats(
+    playerA: string,
+    playerB: string,
+    playerAPubkey: Uint8Array,
+    playerBPubkey: Uint8Array
+  ): Promise<void> {
+    return this.call("setChainSeats", {
+      playerA,
+      playerB,
+      playerAPubkey,
+      playerBPubkey,
+    });
   }
   setContinueWish(wish: boolean): Promise<void> {
     return this.call("setContinueWish", { wish });
@@ -96,8 +109,8 @@ export class PokerWorkerClient {
   }> {
     return this.call("buildSessionResult", args);
   }
-  onPeerAnnouncement(frame: Uint8Array): Promise<MatchedResult> {
-    return this.call("onPeerAnnouncement", { frame });
+  onPeerSessionHello(frame: Uint8Array): Promise<MatchedResult> {
+    return this.call("onPeerSessionHello", { frame });
   }
   setSessionSeed(seed: string): Promise<void> {
     return this.call("setSessionSeed", { seed });

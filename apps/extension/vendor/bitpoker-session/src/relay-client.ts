@@ -10,13 +10,18 @@
 
 export enum RelayType {
   ClientHello = 1,
-  MatchAnnouncement = 2,
+  // Frame 2 carries the per-session hello the two seats exchange to agree on
+  // order and stake (relay_protocol.hpp RelayMessageType). It used to carry a
+  // free-form match announcement; the wire value did not change when the
+  // gamecore moved to the session-hello handshake.
+  SessionHello = 2,
   MatchResult = 3,
   OpenStream = 4,
   StreamData = 5,
   Settlement = 6,
   ChatMessage = 7,
   Receipt = 8,
+  SessionResume = 9,
   Error = 255,
 }
 
@@ -229,8 +234,8 @@ export class RelayClient {
     }
     this.ws.send(packRelayFrame(type, ++this.requestId, payload));
   }
-  sendAnnouncement(packedAnnouncement: Uint8Array): void {
-    this.sendFrame(RelayType.MatchAnnouncement, packedAnnouncement);
+  sendSessionHello(packedHello: Uint8Array): void {
+    this.sendFrame(RelayType.SessionHello, packedHello);
   }
   sendStream(packedGameFrame: Uint8Array): void {
     this.sendFrame(RelayType.StreamData, packedGameFrame);

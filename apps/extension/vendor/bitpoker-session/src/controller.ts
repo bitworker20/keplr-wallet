@@ -35,6 +35,13 @@ const bytesToHex = (bytes: Uint8Array): string =>
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
 
+// How long to wait for an ADR-007 endpoint answer on a chain that does not
+// gate answering (relay_answer_timeout_blocks = 0, the default genesis). The
+// relay's answer loop polls every couple of seconds, so this is generous
+// enough for a slow one and short enough that a chain with no answering relay
+// at all still reports the problem promptly.
+const UNGATED_ANSWER_GRACE_MS = 30000;
+
 export type PokerGame = "TH" | "ZJH";
 
 export interface JoinOptions {
@@ -105,7 +112,7 @@ export class PokerGameController {
   protected readonly worker: PokerWorkerClient;
   protected snapshot: GameSnapshot = { stage: "idle", message: "", wait: 1 };
   protected matched?: MatchedResult;
-  protected announcement?: Uint8Array;
+  protected sessionHello?: Uint8Array;
   protected running = false;
 
   // On-chain session state (joinChain mode).
@@ -180,15 +187,12 @@ export class PokerGameController {
         playerSessionPubkey: "keplr-dev",
       });
 
-      this.announcement = await this.worker.buildAnnouncement({
+      this.sessionHello = await this.worker.buildSessionHello({
         name: opts.playerName,
-        game: this.game,
-        chip: opts.chip,
-        opponent: "ANY",
-        minBet: opts.minBet,
-        maxBet: opts.maxBet,
+        betAmount: opts.maxBet,
+        accountAddress: opts.accountAddress,
       });
-      this.relay.sendAnnouncement(this.announcement);
+      this.relay.sendSessionHello(this.sessionHello);
       this.emit({ stage: "matching", message: "waiting for an opponent…" });
 
       await this.pump();
@@ -295,22 +299,41 @@ export class PokerGameController {
       );
       const hasAnswer = (s: any): boolean =>
         !!s.relay_endpoint_answer && !!s.relay_endpoint_answer.relay_id;
-      if (!hasAnswer(liveSession) && answerDeadline > 0) {
+      if (!hasAnswer(liveSession)) {
+        // The answer is written by the relay a poll interval or two after the
+        // match, so it is never there the instant we read the session. Wait
+        // for it either way:
+        //
+        //   deadline > 0   the chain gates answering (relay_answer_timeout_
+        //                  blocks is set) and enforces the deadline; missing
+        //                  it means the session can be voided for a refund.
+        //   deadline == 0  answering is UNGATED, which is the default genesis.
+        //                  There is no chain deadline to wait on, so use a
+        //                  local grace period — waiting a few seconds for the
+        //                  relay's next poll is the difference between playing
+        //                  and reporting that nobody published an endpoint.
+        const graceUntil = Date.now() + UNGATED_ANSWER_GRACE_MS;
         this.emit({
           stage: "matching",
           message: "waiting for the assigned relay to allocate an endpoint…",
         });
         for (; this.running; ) {
-          const latest = await lcd(
-            "/cosmos/base/tendermint/v1beta1/blocks/latest"
-          );
-          const height = Number(latest.block.header.height);
-          if (height >= answerDeadline) {
-            this.fail(
-              "no assigned relay answered before the deadline; " +
-                "the session can be voided for a full refund"
+          if (answerDeadline > 0) {
+            const latest = await lcd(
+              "/cosmos/base/tendermint/v1beta1/blocks/latest"
             );
-            return;
+            const height = Number(latest.block.header.height);
+            if (height >= answerDeadline) {
+              this.fail(
+                "no assigned relay answered before the deadline; " +
+                  "the session can be voided for a full refund"
+              );
+              return;
+            }
+          } else if (Date.now() >= graceUntil) {
+            // Fall through to the legacy registry endpoint, which either
+            // serves one (pre-ADR-007 chain) or reports that it does not.
+            break;
           }
           liveSession = (
             await lcd(`/pokerchain/pokerchain/v1/sessions/${sessionId}`)
@@ -318,7 +341,7 @@ export class PokerGameController {
           if (hasAnswer(liveSession)) {
             break;
           }
-          await new Promise((resolve) => setTimeout(resolve, 2000));
+          await new Promise((resolve) => setTimeout(resolve, 1000));
         }
         if (!this.running) {
           return;
@@ -344,11 +367,23 @@ export class PokerGameController {
           connectTokenSubprotocol(grant.connectToken),
         ];
       } else {
-        // Legacy chain: the registry still serves an endpoint.
+        // Legacy chain: the registry still serves an endpoint. Under ADR-007
+        // it does not — the field is gone — so an empty answer here means the
+        // assigned relay never allocated an endpoint for this session, and
+        // there is nowhere to connect. Say that, rather than handing an
+        // undefined URL to the WebSocket and reporting whatever it throws.
         const relayRes = await lcd(
           `/pokerchain/pokerchain/v1/relays/${relayId}`
         );
-        relayEndpoint = relayRes.relay.endpoint;
+        relayEndpoint = relayRes.relay?.endpoint ?? "";
+        if (!relayEndpoint) {
+          this.fail(
+            `relay ${relayId} published no endpoint for this session: the ` +
+              `chain expects the ADR-007 answer protocol, so poker-relayd ` +
+              `must run with -relay-key-name, -chain-node and -chain-id`
+          );
+          return;
+        }
       }
       this.chainSession = session;
       this.emit({
@@ -362,8 +397,32 @@ export class PokerGameController {
         message: `matched session ${sessionId}: ${session.player_a} vs ${session.player_b}, relay ${relayId}`,
       });
 
+      // The chain's own record of which session key each seat committed to,
+      // read from the two matched intents. The gamecore verifies the peer's
+      // session hello against it (session_matchmaking.cpp), so a relay cannot
+      // slip a different key in between the match and the first deal.
+      const seatPubkey = async (intentId: string): Promise<Uint8Array> => {
+        const res = await lcd(`/pokerchain/pokerchain/v1/intents/${intentId}`);
+        const hex = res?.intent?.player_session_pubkey ?? "";
+        if (!hex) {
+          throw new Error(
+            `chain intent ${intentId} carries no player_session_pubkey`
+          );
+        }
+        return hexToBytes(hex);
+      };
+      const [playerAPubkey, playerBPubkey] = await Promise.all([
+        seatPubkey(String(session.player_a_intent_id)),
+        seatPubkey(String(session.player_b_intent_id)),
+      ]);
+
       await this.worker.setSessionSeed(sessionId);
-      await this.worker.setChainSeats(session.player_a, session.player_b);
+      await this.worker.setChainSeats(
+        session.player_a,
+        session.player_b,
+        playerAPubkey,
+        playerBPubkey
+      );
 
       // cosmos-signature-v1 relay auth: timestamp + nonce are part of the
       // signed text, so fix them before signing.
@@ -399,19 +458,15 @@ export class PokerGameController {
 
       // The matched session's stake is authoritative (a range intent can match
       // anywhere inside the overlap) — the in-game chips must mirror it on
-      // both seats or the announcements disagree.
+      // both seats or the two hellos disagree.
       const stake = parseInt(String(session.stake), 10);
-      this.announcement = await this.worker.buildAnnouncement({
+      this.sessionHello = await this.worker.buildSessionHello({
         name: opts.playerName,
-        game: this.game,
-        chip: "CHIP",
-        opponent: "ANY",
-        minBet: stake,
-        maxBet: stake,
-        // Chain seats are matched by announcement address (chainPlayerA/B).
-        p2pAddr: address,
+        betAmount: stake,
+        // Seats are matched by account address against chainPlayerA/B.
+        accountAddress: address,
       });
-      this.relay.sendAnnouncement(this.announcement);
+      this.relay.sendSessionHello(this.sessionHello);
       this.emit({ message: "connected to relay, waiting for the opponent…" });
 
       await this.pump();
@@ -457,17 +512,18 @@ export class PokerGameController {
         return;
       }
 
-      if (frame.type === RelayType.MatchAnnouncement && !this.matched) {
-        const matched = await this.worker.onPeerAnnouncement(frame.payload);
+      if (frame.type === RelayType.SessionHello && !this.matched) {
+        const matched = await this.worker.onPeerSessionHello(frame.payload);
         if (matched.error) {
           this.fail(`match failed: ${matched.error}`);
           return;
         }
         this.matched = matched;
-        // The relay replays announcements to late joiners, but re-send ours so
-        // the exchange is join-order agnostic even against older relays.
-        if (this.announcement) {
-          this.relay.sendAnnouncement(this.announcement);
+        // The relay replays hellos to late joiners, but re-send ours so the
+        // exchange is join-order agnostic even against older relays. The
+        // hello is idempotent; peers ignore a duplicate mid-hand.
+        if (this.sessionHello) {
+          this.relay.sendSessionHello(this.sessionHello);
         }
         this.emit({
           stage: "playing",
@@ -493,7 +549,7 @@ export class PokerGameController {
         }
         continue;
       }
-      // Settlement/Chat/duplicate announcements are not the hand's concern.
+      // Settlement/Chat/duplicate hellos are not the hand's concern.
     }
   }
 

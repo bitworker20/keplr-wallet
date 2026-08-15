@@ -32,6 +32,17 @@ describe("lobby filtering", () => {
     ).toHaveLength(0);
   });
 
+  it("drops intents that are no longer pending", () => {
+    // The status query parameter is the first line of defence; this is what
+    // catches a gateway that ignored it.
+    expect(
+      joinableIntents([intent({ status: "GAME_INTENT_STATUS_MATCHED" })], me)
+    ).toHaveLength(0);
+    expect(
+      joinableIntents([intent({ status: "GAME_INTENT_STATUS_CANCELLED" })], me)
+    ).toHaveLength(0);
+  });
+
   it("drops unplayable game types", () => {
     expect(
       joinableIntents([intent({ game_type: "GAME_TYPE_CC" })], me)
