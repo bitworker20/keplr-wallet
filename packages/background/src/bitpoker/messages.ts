@@ -29,6 +29,43 @@ export class BitpokerGetKeyMsg extends Message<{
   }
 }
 
+// Withdraws an unmatched offer. Deliberately NOT gated behind an approval
+// popup like BitpokerOpenIntentMsg: this is the message that takes money OFF
+// the table, and the page sends it exactly when the player has walked away.
+export class BitpokerCancelIntentMsg extends Message<{
+  txHash: string;
+  code: number;
+  rawLog: string;
+}> {
+  public static type() {
+    return "bitpoker-cancel-intent";
+  }
+
+  constructor(
+    public readonly chainId: string,
+    public readonly intentId: string
+  ) {
+    super();
+  }
+
+  validateBasic(): void {
+    if (!this.chainId) {
+      throw new Error("chain id is empty");
+    }
+    if (!/^[0-9]+$/.test(this.intentId)) {
+      throw new Error("intent id must be a decimal integer");
+    }
+  }
+
+  route(): string {
+    return ROUTE;
+  }
+
+  type(): string {
+    return BitpokerCancelIntentMsg.type();
+  }
+}
+
 export class BitpokerOpenIntentMsg extends Message<{
   txHash: string;
   code: number;

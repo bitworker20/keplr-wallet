@@ -1,6 +1,12 @@
-import { ChainGameIntent, joinableIntents, localGameName } from "./lobby";
+import {
+  ChainGameIntent,
+  intentExpired,
+  joinableIntents,
+  localGameName,
+} from "./lobby";
 
 const intent = (over: Partial<ChainGameIntent>): ChainGameIntent => ({
+  expires_at_height: "0",
   intent_id: "1",
   creator: "xpoker1creator",
   opponent: "",
@@ -41,6 +47,31 @@ describe("lobby filtering", () => {
     expect(
       joinableIntents([intent({ status: "GAME_INTENT_STATUS_CANCELLED" })], me)
     ).toHaveLength(0);
+  });
+
+  it("drops offers the chain will no longer match", () => {
+    // Expired intents stay PENDING on chain — nothing sweeps them — so this
+    // is the only thing standing between the lobby and a game that cannot
+    // start. Joining one costs a fee for an intent that can never match.
+    const expiring = intent({ expires_at_height: "500" });
+    expect(joinableIntents([expiring], me, 499)).toHaveLength(1);
+    expect(joinableIntents([expiring], me, 500)).toHaveLength(0);
+    expect(joinableIntents([expiring], me, 900)).toHaveLength(0);
+  });
+
+  it("keeps every offer when the height is unknown", () => {
+    // The height query failed; an empty lobby would be a worse lie than a
+    // stale one, and the native client makes the same choice.
+    expect(
+      joinableIntents([intent({ expires_at_height: "500" })], me, 0)
+    ).toHaveLength(1);
+  });
+
+  it("treats a zero deadline as never expiring", () => {
+    expect(intentExpired(intent({ expires_at_height: "0" }), 10_000)).toBe(
+      false
+    );
+    expect(intentExpired(intent({}), 10_000)).toBe(false);
   });
 
   it("drops unplayable game types", () => {

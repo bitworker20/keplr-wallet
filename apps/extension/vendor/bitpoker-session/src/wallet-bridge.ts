@@ -83,6 +83,11 @@ export interface PokerWalletBridge {
   // escrows the stake, so implementations gate it behind a user approval.
   openIntent(chainId: string, args: OpenIntentArgs): Promise<PokerTxResult>;
 
+  // Withdraws an offer that has not been matched. It is the opposite of
+  // locking funds — an intent left standing is what reaches into an absent
+  // player's wallet an hour later — so it is signed without a prompt.
+  cancelIntent(chainId: string, intentId: string): Promise<PokerTxResult>;
+
   // The remaining three release or defend escrow that is already at stake and
   // run inside the protocol's frame-timeout / dispute-deadline windows, so
   // they are signed without an interactive prompt by design.

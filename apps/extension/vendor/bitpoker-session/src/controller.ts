@@ -20,6 +20,7 @@ import {
   generateTransportKeypair,
   openEndpointBlob,
 } from "./endpoint-blob";
+import { isPendingIntent } from "./lobby";
 import { PokerWorkerClient } from "./worker-client";
 import { HandEffect, MatchedResult, TableState } from "./types";
 
@@ -117,6 +118,14 @@ export class PokerGameController {
 
   // On-chain session state (joinChain mode).
   protected chainSession?: any;
+  // The intent this run opened, until it is matched. An intent left standing
+  // is not harmless: matching escrows both stakes, so an offer that outlives
+  // the tab reaches into the player's wallet up to an hour later and creates
+  // a session nobody is there to play.
+  protected openIntentId = "";
+  // Set by cancelMatchmaking so the polling loop knows the player walked away
+  // rather than the chain running out of time — the two want different words.
+  protected matchmakingCancelled = false;
   protected chainAddress = "";
   protected chainId = "";
   protected chainLcdUrl = "";
@@ -242,6 +251,14 @@ export class PokerGameController {
       const maxStake = opts.maxStakeUchip ?? opts.stake ?? "0";
       const opponent =
         !opts.opponent || opts.opponent === "ANY" ? "" : opts.opponent;
+      // Withdraw anything this account left standing from an earlier tab or a
+      // crashed run. Two reasons, both real: those offers can still be matched
+      // while nobody is watching, and matching takes the OLDEST compatible
+      // intent — so a stale one is matched in preference to the fresh one
+      // below, and this run then waits for a match that already happened to
+      // a session key it does not have.
+      await this.cancelStrandedIntents(lcd, opts.chainId, address);
+
       const intentTx = await this.wallet.openIntent(opts.chainId, {
         // GameType: TH=3, ZJH=2 (pokerchain enum).
         gameType: this.game === "ZJH" ? 2 : 3,
@@ -269,8 +286,11 @@ export class PokerGameController {
           .sort((a, b) => Number(b.intent_id) - Number(a.intent_id))[0];
         if (mine) {
           intentId = String(mine.intent_id);
+          this.openIntentId = intentId;
           if (mine.matched_session_id && mine.matched_session_id !== "0") {
             sessionId = String(mine.matched_session_id);
+            // Matched: the offer is spent, and cancelling it now would fail.
+            this.openIntentId = "";
             break;
           }
         }
@@ -281,7 +301,15 @@ export class PokerGameController {
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }
       if (!sessionId) {
-        this.fail("no chain match within 120s");
+        if (this.matchmakingCancelled) {
+          // cancelMatchmaking already withdrew the offer and said so.
+          return;
+        }
+        await this.withdrawOpenIntent();
+        this.fail(
+          "no chain match within 120s — the offer was withdrawn, so nothing " +
+            "is left standing against your balance"
+        );
         return;
       }
 
@@ -471,6 +499,9 @@ export class PokerGameController {
 
       await this.pump();
     } catch (e: any) {
+      // Anything that goes wrong before the match leaves an offer nobody is
+      // going to play; take it off the table.
+      await this.withdrawOpenIntent();
       this.fail(e?.message ?? String(e));
     }
   }
@@ -755,6 +786,76 @@ export class PokerGameController {
     } catch (e: any) {
       this.emit({ stage: "error", message: e?.message ?? String(e) });
     }
+  }
+
+  // Withdraw the offer this run opened, if it is still standing. Best effort:
+  // the tx can fail because the intent was matched a moment ago, or expired,
+  // and neither is worth turning into the error the player sees — the reason
+  // they are here is that something else already went wrong.
+  protected async withdrawOpenIntent(): Promise<void> {
+    const intentId = this.openIntentId;
+    if (!intentId) {
+      return;
+    }
+    this.openIntentId = "";
+    try {
+      const res = await this.wallet.cancelIntent(this.chainId, intentId);
+      if (res.code !== 0) {
+        console.warn(`could not withdraw intent ${intentId}: ${res.rawLog}`);
+      }
+    } catch (e: any) {
+      console.warn(`could not withdraw intent ${intentId}: ${e?.message ?? e}`);
+    }
+  }
+
+  // Retire this account's leftover offers before opening a new one. The chain
+  // lets a creator cancel any PENDING intent of theirs, and matching would
+  // otherwise prefer these older ones over the fresh one.
+  protected async cancelStrandedIntents(
+    lcd: (path: string) => Promise<any>,
+    chainId: string,
+    address: string
+  ): Promise<void> {
+    let stranded: string[] = [];
+    try {
+      const res = await lcd(
+        `/pokerchain/pokerchain/v1/intents?owner=${address}`
+      );
+      const intents: any[] = res.intents ?? [];
+      stranded = intents
+        .filter((intent) => isPendingIntent(intent))
+        .map((intent) => String(intent.intent_id));
+    } catch (e: any) {
+      // A failed lobby query is not a reason to refuse to play.
+      console.warn(`could not look for stranded intents: ${e?.message ?? e}`);
+      return;
+    }
+    for (const intentId of stranded) {
+      try {
+        const res = await this.wallet.cancelIntent(chainId, intentId);
+        if (res.code === 0) {
+          this.emit({
+            message: `withdrew a leftover offer (intent ${intentId})`,
+          });
+        }
+      } catch (e: any) {
+        console.warn(`could not cancel intent ${intentId}: ${e?.message ?? e}`);
+      }
+    }
+  }
+
+  // The player gave up waiting. Public because only the UI knows that — the
+  // controller is happy to keep polling.
+  async cancelMatchmaking(): Promise<void> {
+    this.matchmakingCancelled = true;
+    // Stop the polling loop first: it emits "waiting for an opponent" every
+    // second, and the withdrawal takes a block or two to land. Without this
+    // the page goes on inviting an opponent the player has already given up
+    // on.
+    this.running = false;
+    this.emit({ message: "withdrawing the offer…" });
+    await this.withdrawOpenIntent();
+    this.fail("you withdrew the offer before it matched");
   }
 
   protected fail(message: string): void {

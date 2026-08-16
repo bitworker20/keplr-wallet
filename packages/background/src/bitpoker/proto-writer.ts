@@ -102,6 +102,16 @@ export function encodeMsgOpenGameIntent(msg: {
     .finish();
 }
 
+export function encodeMsgCancelGameIntent(msg: {
+  creator: string;
+  intentId: string;
+}): Uint8Array {
+  return new ProtoWriter()
+    .string(1, msg.creator)
+    .uint64(2, msg.intentId)
+    .finish();
+}
+
 export function encodeMsgSubmitSessionResult(msg: {
   creator: string;
   sessionId: string;
@@ -162,6 +172,8 @@ export function encodeMsgSubmitSessionSecret(msg: {
 
 export const MSG_OPEN_GAME_INTENT_TYPE_URL =
   "/pokerchain.pokerchain.v1.MsgOpenGameIntent";
+export const MSG_CANCEL_GAME_INTENT_TYPE_URL =
+  "/pokerchain.pokerchain.v1.MsgCancelGameIntent";
 export const MSG_SUBMIT_SESSION_RESULT_TYPE_URL =
   "/pokerchain.pokerchain.v1.MsgSubmitSessionResult";
 export const MSG_SUBMIT_SESSION_EVIDENCE_TYPE_URL =

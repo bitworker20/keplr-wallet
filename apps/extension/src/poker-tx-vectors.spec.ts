@@ -11,6 +11,7 @@
 // BOTH encoders; whichever one lags will fail here or there.
 import vectors from "@bitpoker/poker-session/fixtures/chain-tx-vectors.json";
 import {
+  encodeMsgCancelGameIntent,
   encodeMsgOpenGameIntent,
   encodeMsgSubmitSessionEvidence,
   encodeMsgSubmitSessionResult,
@@ -32,6 +33,12 @@ describe("background pokerchain encoder matches the shared golden vectors", () =
     expect(
       hex(encodeMsgOpenGameIntent(vectors.openGameIntentOpenMatch.input))
     ).toBe(vectors.openGameIntentOpenMatch.hex);
+  });
+
+  it("encodes MsgCancelGameIntent", () => {
+    expect(hex(encodeMsgCancelGameIntent(vectors.cancelGameIntent.input))).toBe(
+      vectors.cancelGameIntent.hex
+    );
   });
 
   it("encodes MsgSubmitSessionResult", () => {

@@ -23,6 +23,13 @@
     },
     "hex": "0a2d78706f6b65723175666c766c667565796a6b7670666d7467797a74367478736b70716e3371636875356b716368100220013206303261616262"
   },
+  "cancelGameIntent": {
+    "input": {
+      "creator": "xpoker1uflvlfueyjkvpfmtgyzt6txskpqn3qchu5kqch",
+      "intentId": "3"
+    },
+    "hex": "0a2d78706f6b65723175666c766c667565796a6b7670666d7467797a74367478736b70716e3371636875356b7163681003"
+  },
   "submitSessionResult": {
     "input": {
       "creator": "xpoker1uflvlfueyjkvpfmtgyzt6txskpqn3qchu5kqch",

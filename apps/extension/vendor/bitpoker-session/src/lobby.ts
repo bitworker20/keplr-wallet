@@ -14,6 +14,9 @@ export interface ChainGameIntent {
   status: string;
   player_session_pubkey: string;
   matched_session_id: string;
+  // Block height after which the chain refuses to match this offer. "0" (or
+  // absent, on an older chain) means it never expires.
+  expires_at_height?: string;
 }
 
 // "GAME_TYPE_TH" -> "TH" (local game name used by the controller/worker).
@@ -52,7 +55,7 @@ export async function fetchOpenIntents(
 // Belt and braces on the query parameter above: an intent that is already
 // matched must never be offered as joinable, whatever the gateway did with
 // the filter.
-function isPending(intent: ChainGameIntent): boolean {
+export function isPendingIntent(intent: ChainGameIntent): boolean {
   return (
     intent.status === undefined ||
     intent.status === "" ||
@@ -61,14 +64,35 @@ function isPending(intent: ChainGameIntent): boolean {
   );
 }
 
-// Which pending intents can `me` join? Mirrors the native/Qt lobby filter:
-// not my own intent, playable game, and either open to anyone or aimed at me.
+// An offer the chain will no longer match. Expired intents stay PENDING in
+// state — nothing sweeps them — so a lobby that shows every PENDING intent
+// offers games that cannot happen, and joining one costs a transaction fee
+// for a mirrored intent that can never be matched.
+export function intentExpired(
+  intent: ChainGameIntent,
+  chainHeight: number
+): boolean {
+  const expiresAt = Number(intent.expires_at_height ?? "0");
+  return expiresAt > 0 && chainHeight > 0 && chainHeight >= expiresAt;
+}
+
+// Which pending intents can `me` join? Mirrors the native lobby filter
+// (ChainSessionRestClient::queryMatchableGameIntents): not my own intent,
+// playable game, not expired, and either open to anyone or aimed at me.
+//
+// chainHeight of 0 means "unknown" — the height query failed — and skips the
+// expiry check rather than emptying the lobby over it, the same choice the
+// native client makes.
 export function joinableIntents(
   all: ChainGameIntent[],
-  me: string
+  me: string,
+  chainHeight = 0
 ): ChainGameIntent[] {
   return all.filter((intent) => {
-    if (!isPending(intent)) {
+    if (!isPendingIntent(intent)) {
+      return false;
+    }
+    if (intentExpired(intent, chainHeight)) {
       return false;
     }
     if (intent.creator === me) {
@@ -86,6 +110,23 @@ export function joinableIntents(
     }
     return true;
   });
+}
+
+// The chain's current height, or 0 when the node will not say. Used to hide
+// expired offers; a lobby is not worth failing over.
+export async function fetchChainHeight(lcdUrl: string): Promise<number> {
+  try {
+    const res = await fetch(
+      `${lcdUrl}/cosmos/base/tendermint/v1beta1/blocks/latest`
+    );
+    if (!res.ok) {
+      return 0;
+    }
+    const json = await res.json();
+    return Number(json?.block?.header?.height ?? 0) || 0;
+  } catch {
+    return 0;
+  }
 }
 
 // The wallet's spendable uchip balance as a uint64-as-string ("0" when the

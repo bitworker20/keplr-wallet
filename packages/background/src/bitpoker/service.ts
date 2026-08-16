@@ -25,10 +25,12 @@ import {
   simulateGasUsed,
 } from "./fees";
 import {
+  encodeMsgCancelGameIntent,
   encodeMsgOpenGameIntent,
   encodeMsgSubmitSessionEvidence,
   encodeMsgSubmitSessionResult,
   encodeMsgSubmitSessionSecret,
+  MSG_CANCEL_GAME_INTENT_TYPE_URL,
   MSG_OPEN_GAME_INTENT_TYPE_URL,
   MSG_SUBMIT_SESSION_EVIDENCE_TYPE_URL,
   MSG_SUBMIT_SESSION_RESULT_TYPE_URL,
@@ -162,6 +164,26 @@ export class BitpokerService {
   // run inside the protocol's 30s frame-timeout / dispute-deadline windows
   // where a popup would forfeit the hand. All of them remain fenced by
   // env.isInternalMsg and (for raw signs) the domain-prefix allowlist.
+  // Withdraw an unmatched offer. No approval: it is the opposite of locking
+  // funds, and the page sends it when the player has stopped waiting — or
+  // never came back at all.
+  async cancelIntent(
+    env: Env,
+    chainId: string,
+    intentId: string
+  ): Promise<{ txHash: string; code: number; rawLog: string }> {
+    if (!env.isInternalMsg) {
+      throw new Error("bitpoker tx is only allowed for internal messages");
+    }
+    const { bech32Address } = await this.getKey(env, chainId);
+    return this.broadcastPokerMsg(
+      chainId,
+      MSG_CANCEL_GAME_INTENT_TYPE_URL,
+      encodeMsgCancelGameIntent({ creator: bech32Address, intentId }),
+      GAS_FLOOR_GAME
+    );
+  }
+
   async openIntent(
     env: Env,
     chainId: string,

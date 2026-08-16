@@ -2,6 +2,7 @@ import { Router } from "@keplr-wallet/router";
 import { BitpokerService } from "./service";
 import {
   BitpokerGetKeyMsg,
+  BitpokerCancelIntentMsg,
   BitpokerOpenIntentMsg,
   BitpokerSignPayloadMsg,
   BitpokerSubmitEvidenceMsg,
@@ -15,6 +16,7 @@ export function init(router: Router, service: BitpokerService): void {
   router.registerMessage(BitpokerSignPayloadMsg);
   router.registerMessage(BitpokerGetKeyMsg);
   router.registerMessage(BitpokerOpenIntentMsg);
+  router.registerMessage(BitpokerCancelIntentMsg);
   router.registerMessage(BitpokerSubmitResultMsg);
   router.registerMessage(BitpokerSubmitEvidenceMsg);
   router.registerMessage(BitpokerSubmitSecretMsg);
