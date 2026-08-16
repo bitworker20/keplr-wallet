@@ -20,7 +20,8 @@ describe("sessionRecovery", () => {
     const s = session({});
     expect(sessionRecovery(s, 999, ME).kind).toBe("wait");
     expect(sessionRecovery(s, 999, ME).atHeight).toBe(1000);
-    expect(sessionRecovery(s, 1000, ME).kind).toBe("refund");
+    expect(sessionRecovery(s, 1000, ME).kind).toBe("ready");
+    expect(sessionRecovery(s, 1000, ME).action).toBe("refund");
   });
 
   it("uses the much shorter relay-answer deadline when no relay answered", () => {
@@ -31,7 +32,7 @@ describe("sessionRecovery", () => {
       active_deadline_height: "10000",
     });
     expect(sessionRecovery(s, 199, ME).atHeight).toBe(200);
-    expect(sessionRecovery(s, 200, ME).kind).toBe("refund");
+    expect(sessionRecovery(s, 200, ME).kind).toBe("ready");
   });
 
   it("leaves an answered session on the abandoned-session deadline", () => {
@@ -51,6 +52,19 @@ describe("sessionRecovery", () => {
     expect(sessionRecovery(s, 99999, ME).kind).toBe("none");
   });
 
+  it("says what a countdown will do, not just that it is waiting", () => {
+    // A RESULT_PENDING session heads for adjudication, so a button labelled
+    // "refund" while it counts down would be a promise the chain will not
+    // keep.
+    const s = session({
+      status: "GAME_SESSION_STATUS_RESULT_PENDING",
+      result_deadline_height: "300",
+      player_a_result: { winner: ME },
+    });
+    expect(sessionRecovery(s, 1, ME).kind).toBe("wait");
+    expect(sessionRecovery(s, 1, ME).action).toBe("escalate");
+  });
+
   it("escalates a result the opponent never confirmed", () => {
     const s = session({
       status: "GAME_SESSION_STATUS_RESULT_PENDING",
@@ -58,7 +72,8 @@ describe("sessionRecovery", () => {
       player_a_result: { winner: ME },
     });
     expect(sessionRecovery(s, 299, ME).kind).toBe("wait");
-    expect(sessionRecovery(s, 300, ME).kind).toBe("escalate");
+    expect(sessionRecovery(s, 300, ME).kind).toBe("ready");
+    expect(sessionRecovery(s, 300, ME).action).toBe("escalate");
   });
 
   it("tells the player to submit their own result first", () => {

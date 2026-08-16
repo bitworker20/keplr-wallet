@@ -34,18 +34,23 @@ export interface ChainGameSession {
   player_b_result?: unknown;
 }
 
+// Whether the claim can be sent yet.
 export type RecoveryKind =
-  // Claimable now: the escrow comes back to both players.
-  | "refund"
-  // Claimable now: escalates to adjudication (the opponent owes a result).
-  | "escalate"
-  // Claimable later; `atHeight` says when.
+  // Claimable now.
+  | "ready"
+  // Claimable once `atHeight` passes.
   | "wait"
   // Nothing this client can do about it.
   | "none";
 
+// What sending it will do. Kept separate from `kind` so a session that is
+// still counting down can still be labelled honestly — a RESULT_PENDING
+// session says "send to adjudication" while it waits, not "refund".
+export type RecoveryAction = "refund" | "escalate";
+
 export interface SessionRecovery {
   kind: RecoveryKind;
+  action: RecoveryAction;
   // The height the claim becomes available, for "wait".
   atHeight: number;
   // One line for the player, phrased as what it does to their money.
@@ -67,9 +72,19 @@ export function sessionRecovery(
 ): SessionRecovery {
   const none = (reason: string): SessionRecovery => ({
     kind: "none",
+    action: "refund",
     atHeight: 0,
     reason,
   });
+  const at = (
+    deadline: number,
+    action: RecoveryAction,
+    ready: string,
+    waiting: string
+  ): SessionRecovery =>
+    chainHeight >= deadline
+      ? { kind: "ready", action, atHeight: deadline, reason: ready }
+      : { kind: "wait", action, atHeight: deadline, reason: waiting };
   if (session.player_a !== me && session.player_b !== me) {
     return none("not your session");
   }
@@ -84,33 +99,23 @@ export function sessionRecovery(
     // neither player could have played it.
     const answerDeadline = Number(session.relay_answer_deadline_height ?? "0");
     if (!session.relay_endpoint_answer && answerDeadline > 0) {
-      return chainHeight >= answerDeadline
-        ? {
-            kind: "refund",
-            atHeight: answerDeadline,
-            reason: "no relay took this game; both stakes can be refunded",
-          }
-        : {
-            kind: "wait",
-            atHeight: answerDeadline,
-            reason: "waiting for a relay to take this game",
-          };
+      return at(
+        answerDeadline,
+        "refund",
+        "no relay took this game; both stakes can be refunded",
+        "waiting for a relay to take this game"
+      );
     }
     const activeDeadline = Number(session.active_deadline_height ?? "0");
     if (activeDeadline === 0) {
       return none("this chain does not time out abandoned sessions");
     }
-    return chainHeight >= activeDeadline
-      ? {
-          kind: "refund",
-          atHeight: activeDeadline,
-          reason: "nobody played this game; both stakes can be refunded",
-        }
-      : {
-          kind: "wait",
-          atHeight: activeDeadline,
-          reason: "abandoned, but the refund deadline has not passed yet",
-        };
+    return at(
+      activeDeadline,
+      "refund",
+      "nobody played this game; both stakes can be refunded",
+      "abandoned, but the refund deadline has not passed yet"
+    );
   }
 
   if (session.status === RESULT_PENDING) {
@@ -127,19 +132,12 @@ export function sessionRecovery(
     if (deadline === 0) {
       return none("this session has no result deadline");
     }
-    return chainHeight >= deadline
-      ? {
-          kind: "escalate",
-          atHeight: deadline,
-          reason:
-            "your opponent never confirmed the result; this sends it to " +
-            "adjudication",
-        }
-      : {
-          kind: "wait",
-          atHeight: deadline,
-          reason: "waiting for your opponent to confirm the result",
-        };
+    return at(
+      deadline,
+      "escalate",
+      "your opponent never confirmed the result; this sends it to adjudication",
+      "waiting for your opponent to confirm the result"
+    );
   }
 
   return none("nothing to recover");
