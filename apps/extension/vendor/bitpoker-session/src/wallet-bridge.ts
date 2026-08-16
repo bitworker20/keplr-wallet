@@ -88,6 +88,15 @@ export interface PokerWalletBridge {
   // player's wallet an hour later — so it is signed without a prompt.
   cancelIntent(chainId: string, intentId: string): Promise<PokerTxResult>;
 
+  // Gets the player out of a session that stopped moving: refunds an
+  // abandoned one, or sends an unconfirmed result to adjudication. What it
+  // does is the chain's decision, not the caller's — see
+  // @bitpoker/poker-session/recovery.
+  claimSessionTimeout(
+    chainId: string,
+    sessionId: string
+  ): Promise<PokerTxResult>;
+
   // The remaining three release or defend escrow that is already at stake and
   // run inside the protocol's frame-timeout / dispute-deadline windows, so
   // they are signed without an interactive prompt by design.

@@ -30,6 +30,13 @@
     },
     "hex": "0a2d78706f6b65723175666c766c667565796a6b7670666d7467797a74367478736b70716e3371636875356b7163681003"
   },
+  "claimSessionTimeout": {
+    "input": {
+      "creator": "xpoker1uflvlfueyjkvpfmtgyzt6txskpqn3qchu5kqch",
+      "sessionId": "7"
+    },
+    "hex": "0a2d78706f6b65723175666c766c667565796a6b7670666d7467797a74367478736b70716e3371636875356b7163681007"
+  },
   "submitSessionResult": {
     "input": {
       "creator": "xpoker1uflvlfueyjkvpfmtgyzt6txskpqn3qchu5kqch",

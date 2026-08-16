@@ -12,6 +12,7 @@
 import vectors from "@bitpoker/poker-session/fixtures/chain-tx-vectors.json";
 import {
   encodeMsgCancelGameIntent,
+  encodeMsgClaimSessionTimeout,
   encodeMsgOpenGameIntent,
   encodeMsgSubmitSessionEvidence,
   encodeMsgSubmitSessionResult,
@@ -39,6 +40,12 @@ describe("background pokerchain encoder matches the shared golden vectors", () =
     expect(hex(encodeMsgCancelGameIntent(vectors.cancelGameIntent.input))).toBe(
       vectors.cancelGameIntent.hex
     );
+  });
+
+  it("encodes MsgClaimSessionTimeout", () => {
+    expect(
+      hex(encodeMsgClaimSessionTimeout(vectors.claimSessionTimeout.input))
+    ).toBe(vectors.claimSessionTimeout.hex);
   });
 
   it("encodes MsgSubmitSessionResult", () => {

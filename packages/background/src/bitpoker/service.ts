@@ -26,11 +26,13 @@ import {
 } from "./fees";
 import {
   encodeMsgCancelGameIntent,
+  encodeMsgClaimSessionTimeout,
   encodeMsgOpenGameIntent,
   encodeMsgSubmitSessionEvidence,
   encodeMsgSubmitSessionResult,
   encodeMsgSubmitSessionSecret,
   MSG_CANCEL_GAME_INTENT_TYPE_URL,
+  MSG_CLAIM_SESSION_TIMEOUT_TYPE_URL,
   MSG_OPEN_GAME_INTENT_TYPE_URL,
   MSG_SUBMIT_SESSION_EVIDENCE_TYPE_URL,
   MSG_SUBMIT_SESSION_RESULT_TYPE_URL,
@@ -180,6 +182,26 @@ export class BitpokerService {
       chainId,
       MSG_CANCEL_GAME_INTENT_TYPE_URL,
       encodeMsgCancelGameIntent({ creator: bech32Address, intentId }),
+      GAS_FLOOR_GAME
+    );
+  }
+
+  // Recover a stuck session. No approval: the player is getting their own
+  // escrow unstuck, and the chain decides whether that means a refund or
+  // adjudication.
+  async claimSessionTimeout(
+    env: Env,
+    chainId: string,
+    sessionId: string
+  ): Promise<{ txHash: string; code: number; rawLog: string }> {
+    if (!env.isInternalMsg) {
+      throw new Error("bitpoker tx is only allowed for internal messages");
+    }
+    const { bech32Address } = await this.getKey(env, chainId);
+    return this.broadcastPokerMsg(
+      chainId,
+      MSG_CLAIM_SESSION_TIMEOUT_TYPE_URL,
+      encodeMsgClaimSessionTimeout({ creator: bech32Address, sessionId }),
       GAS_FLOOR_GAME
     );
   }

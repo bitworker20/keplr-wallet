@@ -3,6 +3,7 @@ import { BitpokerService } from "./service";
 import {
   BitpokerGetKeyMsg,
   BitpokerCancelIntentMsg,
+  BitpokerClaimSessionTimeoutMsg,
   BitpokerOpenIntentMsg,
   BitpokerSignPayloadMsg,
   BitpokerSubmitEvidenceMsg,
@@ -17,6 +18,7 @@ export function init(router: Router, service: BitpokerService): void {
   router.registerMessage(BitpokerGetKeyMsg);
   router.registerMessage(BitpokerOpenIntentMsg);
   router.registerMessage(BitpokerCancelIntentMsg);
+  router.registerMessage(BitpokerClaimSessionTimeoutMsg);
   router.registerMessage(BitpokerSubmitResultMsg);
   router.registerMessage(BitpokerSubmitEvidenceMsg);
   router.registerMessage(BitpokerSubmitSecretMsg);

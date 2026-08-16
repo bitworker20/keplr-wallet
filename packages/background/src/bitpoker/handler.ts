@@ -9,6 +9,7 @@ import { BitpokerService } from "./service";
 import {
   BitpokerGetKeyMsg,
   BitpokerCancelIntentMsg,
+  BitpokerClaimSessionTimeoutMsg,
   BitpokerOpenIntentMsg,
   BitpokerSignPayloadMsg,
   BitpokerSubmitEvidenceMsg,
@@ -28,6 +29,11 @@ export const getHandler: (service: BitpokerService) => Handler = (
         );
       case BitpokerGetKeyMsg:
         return handleBitpokerGetKeyMsg(service)(env, msg as BitpokerGetKeyMsg);
+      case BitpokerClaimSessionTimeoutMsg:
+        return handleBitpokerClaimSessionTimeoutMsg(service)(
+          env,
+          msg as BitpokerClaimSessionTimeoutMsg
+        );
       case BitpokerCancelIntentMsg:
         return handleBitpokerCancelIntentMsg(service)(
           env,
@@ -88,6 +94,13 @@ const handleBitpokerOpenIntentMsg: (
       playerTransportPubkey: msg.playerTransportPubkey,
     });
   };
+};
+
+const handleBitpokerClaimSessionTimeoutMsg: (
+  service: BitpokerService
+) => InternalHandler<BitpokerClaimSessionTimeoutMsg> = (service) => {
+  return (env, msg) =>
+    service.claimSessionTimeout(env, msg.chainId, msg.sessionId);
 };
 
 const handleBitpokerCancelIntentMsg: (

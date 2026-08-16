@@ -66,6 +66,43 @@ export class BitpokerCancelIntentMsg extends Message<{
   }
 }
 
+// Recovers a session that stopped moving: refunds an abandoned one, or sends
+// an unconfirmed result to adjudication. Which of those it does is the
+// chain's call, not the page's.
+export class BitpokerClaimSessionTimeoutMsg extends Message<{
+  txHash: string;
+  code: number;
+  rawLog: string;
+}> {
+  public static type() {
+    return "bitpoker-claim-session-timeout";
+  }
+
+  constructor(
+    public readonly chainId: string,
+    public readonly sessionId: string
+  ) {
+    super();
+  }
+
+  validateBasic(): void {
+    if (!this.chainId) {
+      throw new Error("chain id is empty");
+    }
+    if (!/^[0-9]+$/.test(this.sessionId)) {
+      throw new Error("session id must be a decimal integer");
+    }
+  }
+
+  route(): string {
+    return ROUTE;
+  }
+
+  type(): string {
+    return BitpokerClaimSessionTimeoutMsg.type();
+  }
+}
+
 export class BitpokerOpenIntentMsg extends Message<{
   txHash: string;
   code: number;

@@ -112,6 +112,16 @@ export function encodeMsgCancelGameIntent(msg: {
     .finish();
 }
 
+export function encodeMsgClaimSessionTimeout(msg: {
+  creator: string;
+  sessionId: string;
+}): Uint8Array {
+  return new ProtoWriter()
+    .string(1, msg.creator)
+    .uint64(2, msg.sessionId)
+    .finish();
+}
+
 export function encodeMsgSubmitSessionResult(msg: {
   creator: string;
   sessionId: string;
@@ -174,6 +184,8 @@ export const MSG_OPEN_GAME_INTENT_TYPE_URL =
   "/pokerchain.pokerchain.v1.MsgOpenGameIntent";
 export const MSG_CANCEL_GAME_INTENT_TYPE_URL =
   "/pokerchain.pokerchain.v1.MsgCancelGameIntent";
+export const MSG_CLAIM_SESSION_TIMEOUT_TYPE_URL =
+  "/pokerchain.pokerchain.v1.MsgClaimSessionTimeout";
 export const MSG_SUBMIT_SESSION_RESULT_TYPE_URL =
   "/pokerchain.pokerchain.v1.MsgSubmitSessionResult";
 export const MSG_SUBMIT_SESSION_EVIDENCE_TYPE_URL =
