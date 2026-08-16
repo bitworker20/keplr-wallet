@@ -97,6 +97,12 @@ export interface PokerWalletBridge {
     sessionId: string
   ): Promise<PokerTxResult>;
 
+  // Asks the chain to run the adjudication engine over a DISPUTED session and
+  // pay out the verdict. A disputed session settles no other way: the escrow
+  // sits there until somebody sends this, and until the dispute deadline
+  // passes "somebody" can only be one of the two players.
+  adjudicateSession(chainId: string, sessionId: string): Promise<PokerTxResult>;
+
   // The remaining three release or defend escrow that is already at stake and
   // run inside the protocol's frame-timeout / dispute-deadline windows, so
   // they are signed without an interactive prompt by design.

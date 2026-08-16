@@ -15,10 +15,23 @@
 //                                       result_deadline_height passes
 //                                       (~100s at the default params)
 //
-// A client that never offers this leaves the player watching an escrow they
+// A DISPUTED session is past that message and needs the other two, in order:
+//
+//   MsgSubmitSessionSecret              disclose this seat's per-hand key, so
+//                                       the engine scores the cards this
+//                                       player actually held instead of
+//                                       treating the hand as forfeited
+//   MsgAdjudicateSession                run the engine and pay out. Nothing
+//                                       else releases a disputed escrow, and
+//                                       until dispute_deadline_height only the
+//                                       two players may send it
+//
+// A client that never offers these leaves the player watching an escrow they
 // cannot touch. The native client does it from its retreat flow
 // (client/session_recovery.cpp); this is the browser's smaller version of the
 // same idea: say what is recoverable, and let the player press the button.
+
+import { sessionIdentityForIntent } from "./session-vault";
 
 export interface ChainGameSession {
   session_id: string;
@@ -32,6 +45,19 @@ export interface ChainGameSession {
   relay_endpoint_answer?: unknown;
   player_a_result?: unknown;
   player_b_result?: unknown;
+  player_a_intent_id?: string;
+  player_b_intent_id?: string;
+  dispute_deadline_height?: string;
+  adjudication?: unknown;
+}
+
+// What the client knows about a disputed session beyond the session record
+// itself. Passed in rather than fetched here so this stays a pure function.
+export interface DisputeContext {
+  // This seat still holds an undisclosed session secret (session-vault.ts).
+  heldSecret?: boolean;
+  // Somebody has submitted evidence, so the engine has a hand to replay.
+  evidenceOnChain?: boolean;
 }
 
 // Whether the claim can be sent yet.
@@ -46,7 +72,7 @@ export type RecoveryKind =
 // What sending it will do. Kept separate from `kind` so a session that is
 // still counting down can still be labelled honestly — a RESULT_PENDING
 // session says "send to adjudication" while it waits, not "refund".
-export type RecoveryAction = "refund" | "escalate";
+export type RecoveryAction = "refund" | "escalate" | "reveal" | "adjudicate";
 
 export interface SessionRecovery {
   kind: RecoveryKind;
@@ -59,16 +85,18 @@ export interface SessionRecovery {
 
 const ACTIVE = "GAME_SESSION_STATUS_ACTIVE";
 const RESULT_PENDING = "GAME_SESSION_STATUS_RESULT_PENDING";
+const DISPUTED = "GAME_SESSION_STATUS_DISPUTED";
 
-// Which sessions to ask the chain about. DISPUTED is deliberately absent: it
-// is already on its way to adjudication and MsgClaimSessionTimeout does not
-// apply to it.
-export const UNFINISHED_SESSION_STATUSES = [1, 2] as const;
+// Which sessions to ask the chain about, as the numeric enum the gateway
+// parses: ACTIVE, RESULT_PENDING, DISPUTED. (3 is SETTLED and 5 CANCELLED —
+// both finished.)
+export const UNFINISHED_SESSION_STATUSES = [1, 2, 4] as const;
 
 export function sessionRecovery(
   session: ChainGameSession,
   chainHeight: number,
-  me: string
+  me: string,
+  dispute: DisputeContext = {}
 ): SessionRecovery {
   const none = (reason: string): SessionRecovery => ({
     kind: "none",
@@ -140,12 +168,92 @@ export function sessionRecovery(
     );
   }
 
+  if (session.status === DISPUTED) {
+    // Reveal before verdict: an undisclosed secret is scored as a forfeit, so
+    // asking for a verdict while still holding one throws the hand away.
+    if (dispute.heldSecret) {
+      return {
+        kind: "ready",
+        action: "reveal",
+        atHeight: 0,
+        reason:
+          "under dispute — reveal your cards first, or the adjudicator " +
+          "scores this hand as forfeited",
+      };
+    }
+    if (dispute.evidenceOnChain) {
+      return {
+        kind: "ready",
+        action: "adjudicate",
+        atHeight: 0,
+        reason: "under dispute — ask the chain for a verdict",
+      };
+    }
+    // No evidence was ever submitted, so the engine has nothing to replay and
+    // the chain rejects an adjudication outright. Past the dispute deadline it
+    // stops rejecting and refunds each seat its own stake instead, which is
+    // the only way this escrow ever comes back.
+    const deadline = Number(session.dispute_deadline_height ?? "0");
+    if (deadline === 0) {
+      return none(
+        "under dispute, with no evidence and no deadline to force a verdict"
+      );
+    }
+    return at(
+      deadline,
+      "adjudicate",
+      "nobody submitted evidence; a verdict now refunds both stakes",
+      "under dispute, but nobody submitted evidence — a verdict is only possible after the deadline"
+    );
+  }
+
   return none("nothing to recover");
 }
 
 export interface RecoverableSession {
   session: ChainGameSession;
   recovery: SessionRecovery;
+  // Set for a disputed session this seat can still reveal a secret for: the
+  // intent the stored identity is filed under.
+  intentId?: string;
+}
+
+// The intent this account committed its session pubkey in, which is where its
+// stored secret is filed and which pubkey the chain checks a reveal against.
+export function myIntentId(
+  session: ChainGameSession,
+  me: string
+): string | undefined {
+  if (session.player_a === me) {
+    return session.player_a_intent_id;
+  }
+  if (session.player_b === me) {
+    return session.player_b_intent_id;
+  }
+  return undefined;
+}
+
+// Whether anyone has put evidence on chain for this session — i.e. whether the
+// adjudication engine has a hand to replay at all.
+export async function fetchHasEvidence(
+  lcdUrl: string,
+  sessionId: string
+): Promise<boolean> {
+  try {
+    const res = await fetch(
+      `${lcdUrl.replace(
+        /\/+$/,
+        ""
+      )}/pokerchain/pokerchain/v1/sessions/${sessionId}/evidence`
+    );
+    if (!res.ok) {
+      return false;
+    }
+    const evidence = (await res.json())?.evidence;
+    return Array.isArray(evidence) && evidence.length > 0;
+  } catch {
+    return false;
+  }
 }
 
 // This account's sessions that have not finished, with what can be done about
@@ -174,9 +282,19 @@ export async function fetchRecoverableSessions(
       continue;
     }
     for (const session of sessions) {
-      const recovery = sessionRecovery(session, chainHeight, address);
+      // Only a disputed session needs the extra two questions, and they cost a
+      // request each.
+      const intentId = myIntentId(session, address);
+      const dispute: DisputeContext =
+        session.status === DISPUTED
+          ? {
+              heldSecret: !!(intentId && sessionIdentityForIntent(intentId)),
+              evidenceOnChain: await fetchHasEvidence(base, session.session_id),
+            }
+          : {};
+      const recovery = sessionRecovery(session, chainHeight, address, dispute);
       if (recovery.kind !== "none") {
-        out.push({ session, recovery });
+        out.push({ session, recovery, intentId });
       }
     }
   }

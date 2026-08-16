@@ -10,6 +10,7 @@
 import { InExtensionMessageRequester } from "@keplr-wallet/router-extension";
 import { BACKGROUND_PORT } from "@keplr-wallet/router";
 import {
+  BitpokerAdjudicateSessionMsg,
   BitpokerCancelIntentMsg,
   BitpokerClaimSessionTimeoutMsg,
   BitpokerGetKeyMsg,
@@ -78,6 +79,16 @@ export class ExtensionWalletBridge implements PokerWalletBridge {
     return this.requester.sendMessage(
       BACKGROUND_PORT,
       new BitpokerClaimSessionTimeoutMsg(chainId, sessionId)
+    );
+  }
+
+  adjudicateSession(
+    chainId: string,
+    sessionId: string
+  ): Promise<PokerTxResult> {
+    return this.requester.sendMessage(
+      BACKGROUND_PORT,
+      new BitpokerAdjudicateSessionMsg(chainId, sessionId)
     );
   }
 

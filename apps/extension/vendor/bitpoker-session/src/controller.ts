@@ -21,6 +21,10 @@ import {
   openEndpointBlob,
 } from "./endpoint-blob";
 import { isPendingIntent } from "./lobby";
+import {
+  forgetSessionIdentity,
+  rememberSessionIdentity,
+} from "./session-vault";
 import { PokerWorkerClient } from "./worker-client";
 import { HandEffect, MatchedResult, TableState } from "./types";
 
@@ -123,6 +127,10 @@ export class PokerGameController {
   // the tab reaches into the player's wallet up to an hour later and creates
   // a session nobody is there to play.
   protected openIntentId = "";
+  // The intent this run committed its session pubkey in. Unlike openIntentId
+  // it survives the match: it is the key the stored session identity is filed
+  // under, and how a later reveal finds it.
+  protected myIntentId = "";
   // Set by cancelMatchmaking so the polling loop knows the player walked away
   // rather than the chain running out of time — the two want different words.
   protected matchmakingCancelled = false;
@@ -274,6 +282,11 @@ export class PokerGameController {
       }
 
       this.emit({ stage: "matching", message: "waiting for a chain match…" });
+      // Written down before a card is dealt, because the moment it is needed
+      // is the moment this page is gone: adjudication decrypts each seat's
+      // cards from the secret that seat disclosed on chain, and scores a seat
+      // that disclosed none as having forfeited. See session-vault.ts.
+      const identity = await this.worker.exportSessionSecret();
       let intentId = "";
       let sessionId = "";
       for (let attempt = 0; attempt < 120 && this.running; attempt++) {
@@ -287,6 +300,14 @@ export class PokerGameController {
         if (mine) {
           intentId = String(mine.intent_id);
           this.openIntentId = intentId;
+          if (this.myIntentId !== intentId) {
+            this.myIntentId = intentId;
+            rememberSessionIdentity({
+              intentId,
+              secretKeyHex: bytesToHex(identity.secretKey),
+              pubkeyHex: sessionPubkeyHex,
+            });
+          }
           if (mine.matched_session_id && mine.matched_session_id !== "0") {
             sessionId = String(mine.matched_session_id);
             // Matched: the offer is spent, and cancelling it now would fail.
@@ -687,6 +708,8 @@ export class PokerGameController {
         const sessionStatus: string = res.session?.status ?? "";
         this.emit({ chain: { ...this.snapshot.chain, sessionStatus } });
         if (/SETTLED/.test(sessionStatus)) {
+          // Nothing left to dispute, so the stored identity is spent.
+          forgetSessionIdentity(this.myIntentId);
           this.emit({
             stage: "done",
             table,
@@ -765,6 +788,9 @@ export class PokerGameController {
       if (secretTx.code !== 0) {
         throw new Error(`submit-session-secret failed: ${secretTx.rawLog}`);
       }
+      // Disclosed: it is public now, and the recovery card must not offer to
+      // reveal it a second time.
+      forgetSessionIdentity(this.myIntentId);
 
       // Confirm the session is DISPUTED (the escrow-protecting transition).
       for (let attempt = 0; attempt < 30; attempt++) {
@@ -798,6 +824,8 @@ export class PokerGameController {
       return;
     }
     this.openIntentId = "";
+    // Never matched, so nothing was ever escrowed against this key.
+    forgetSessionIdentity(intentId);
     try {
       const res = await this.wallet.cancelIntent(this.chainId, intentId);
       if (res.code !== 0) {

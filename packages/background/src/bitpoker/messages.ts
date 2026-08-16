@@ -103,6 +103,43 @@ export class BitpokerClaimSessionTimeoutMsg extends Message<{
   }
 }
 
+// Asks the chain to run the adjudication engine over a disputed session. A
+// disputed escrow settles no other way, and before the dispute deadline only
+// the two players may trigger it.
+export class BitpokerAdjudicateSessionMsg extends Message<{
+  txHash: string;
+  code: number;
+  rawLog: string;
+}> {
+  public static type() {
+    return "bitpoker-adjudicate-session";
+  }
+
+  constructor(
+    public readonly chainId: string,
+    public readonly sessionId: string
+  ) {
+    super();
+  }
+
+  validateBasic(): void {
+    if (!this.chainId) {
+      throw new Error("chain id is empty");
+    }
+    if (!/^[0-9]+$/.test(this.sessionId)) {
+      throw new Error("session id must be a decimal integer");
+    }
+  }
+
+  route(): string {
+    return ROUTE;
+  }
+
+  type(): string {
+    return BitpokerAdjudicateSessionMsg.type();
+  }
+}
+
 export class BitpokerOpenIntentMsg extends Message<{
   txHash: string;
   code: number;

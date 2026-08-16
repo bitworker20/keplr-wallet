@@ -25,12 +25,14 @@ import {
   simulateGasUsed,
 } from "./fees";
 import {
+  encodeMsgAdjudicateSession,
   encodeMsgCancelGameIntent,
   encodeMsgClaimSessionTimeout,
   encodeMsgOpenGameIntent,
   encodeMsgSubmitSessionEvidence,
   encodeMsgSubmitSessionResult,
   encodeMsgSubmitSessionSecret,
+  MSG_ADJUDICATE_SESSION_TYPE_URL,
   MSG_CANCEL_GAME_INTENT_TYPE_URL,
   MSG_CLAIM_SESSION_TIMEOUT_TYPE_URL,
   MSG_OPEN_GAME_INTENT_TYPE_URL,
@@ -71,6 +73,12 @@ const ALLOWED_PAYLOAD_PREFIXES = [
 // message-history payload, so it pays a per-byte write cost.
 const GAS_FLOOR_GAME = "400000";
 const GAS_FLOOR_EVIDENCE = "3000000";
+
+// Adjudication replays the disputed hand through the C++ engine inside the tx
+// and then pays out the verdict, so its cost tracks the length of the evidence
+// transcript. It is also the only way a disputed escrow is ever released, so
+// it gets evidence-sized headroom rather than a tight estimate.
+const GAS_FLOOR_ADJUDICATE = "3000000";
 
 // A simulated tx is never verified, but the signature slot must exist and be
 // the right length or the ante handler rejects the shape before measuring.
@@ -203,6 +211,25 @@ export class BitpokerService {
       MSG_CLAIM_SESSION_TIMEOUT_TYPE_URL,
       encodeMsgClaimSessionTimeout({ creator: bech32Address, sessionId }),
       GAS_FLOOR_GAME
+    );
+  }
+
+  // Ask for a verdict on a disputed session. No approval either: it moves the
+  // player's own escrowed stake, and refusing to adjudicate never gets it back.
+  async adjudicateSession(
+    env: Env,
+    chainId: string,
+    sessionId: string
+  ): Promise<{ txHash: string; code: number; rawLog: string }> {
+    if (!env.isInternalMsg) {
+      throw new Error("bitpoker tx is only allowed for internal messages");
+    }
+    const { bech32Address } = await this.getKey(env, chainId);
+    return this.broadcastPokerMsg(
+      chainId,
+      MSG_ADJUDICATE_SESSION_TYPE_URL,
+      encodeMsgAdjudicateSession({ creator: bech32Address, sessionId }),
+      GAS_FLOOR_ADJUDICATE
     );
   }
 

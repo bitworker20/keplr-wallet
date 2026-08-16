@@ -88,6 +88,45 @@ describe("sessionRecovery", () => {
     expect(sessionRecovery(s, 99999, ME).reason).toMatch(/submit your result/);
   });
 
+  it("makes a disputed seat reveal its cards before asking for a verdict", () => {
+    // Adjudication scores an undisclosed secret as a forfeit, so a client that
+    // offered the verdict first would throw away a hand its player had won.
+    const s = session({ status: "GAME_SESSION_STATUS_DISPUTED" });
+    const held = sessionRecovery(s, 5, ME, {
+      heldSecret: true,
+      evidenceOnChain: true,
+    });
+    expect(held.kind).toBe("ready");
+    expect(held.action).toBe("reveal");
+
+    const revealed = sessionRecovery(s, 5, ME, { evidenceOnChain: true });
+    expect(revealed.action).toBe("adjudicate");
+    expect(revealed.kind).toBe("ready");
+  });
+
+  it("waits out the dispute deadline when nobody submitted evidence", () => {
+    // The chain rejects an adjudication it cannot run, and only starts
+    // refunding both stakes instead once the deadline has passed.
+    const s = session({
+      status: "GAME_SESSION_STATUS_DISPUTED",
+      dispute_deadline_height: "400",
+    });
+    expect(sessionRecovery(s, 399, ME).kind).toBe("wait");
+    expect(sessionRecovery(s, 399, ME).action).toBe("adjudicate");
+    expect(sessionRecovery(s, 400, ME).kind).toBe("ready");
+    expect(sessionRecovery(s, 400, ME).reason).toMatch(/refunds both stakes/);
+  });
+
+  it("offers nothing on a dispute with no evidence and no deadline", () => {
+    expect(
+      sessionRecovery(
+        session({ status: "GAME_SESSION_STATUS_DISPUTED" }),
+        9,
+        ME
+      ).kind
+    ).toBe("none");
+  });
+
   it("ignores sessions this account is not seated in", () => {
     const s = session({ player_a: "xpoker1other", player_b: THEM });
     expect(sessionRecovery(s, 99999, ME).kind).toBe("none");
