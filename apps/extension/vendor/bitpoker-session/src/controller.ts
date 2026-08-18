@@ -10,7 +10,6 @@
 import { PokerWalletBridge } from "./wallet-bridge";
 import {
   buildHelloSigningPayload,
-  buildReceiptSigningPayload,
   RelayClient,
   RelayType,
 } from "./relay-client";
@@ -505,27 +504,6 @@ export class PokerGameController {
         timestampMillis,
         nonce,
       });
-
-      // ADR-005: acknowledge the relay so it can claim its fee. Best-effort —
-      // the relay serving us for free is bad, but it must never cost this
-      // player their seat in a session whose stake is already escrowed.
-      try {
-        const receipt = await this.wallet.signPayload(
-          opts.chainId,
-          buildReceiptSigningPayload(opts.chainId, sessionId, relayId)
-        );
-        this.relay.sendRewardReceipt(
-          relayId,
-          sessionId,
-          hexToBytes(receipt.signature)
-        );
-      } catch (e: any) {
-        console.warn(
-          `relay ${relayId} gets no reward receipt for session ${sessionId}: ${
-            e?.message ?? e
-          }`
-        );
-      }
 
       // The matched session's stake is authoritative (a range intent can match
       // anywhere inside the overlap) — the in-game chips must mirror it on
