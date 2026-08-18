@@ -184,12 +184,51 @@ export function encodeClientHello(hello: ClientHelloFields): Uint8Array {
   return new Uint8Array(out);
 }
 
+// --- ADR-005 relay reward receipt --------------------------------------------
+// The browser clients declared RelayType.Receipt but never sent one, so every
+// session with a browser seat reached the relay with only the native seat's
+// receipt. MsgClaimRelayReward needs BOTH players' signatures, so those sessions
+// were permanently unclaimable and the escrowed rake was stranded — silently, on
+// both ends (the relay logged a bare "receipts=1 want=2" and the browser said
+// nothing at all).
+
+// The exact text the relay and the chain keeper verify (relay_protocol.cpp
+// buildRelayReceiptSigningPayload / keeper relayReceiptSignBytes). Byte-for-byte
+// or the signature is rejected.
+export function buildReceiptSigningPayload(
+  chainId: string,
+  sessionId: string | number,
+  relayId: string
+): string {
+  return (
+    "bitpoker-relay-receipt-v2\n" +
+    `${chainId}\n` +
+    `${sessionId}\n` +
+    `${relayId}`
+  );
+}
+
+export function encodeRelayReceipt(
+  authPayload: Uint8Array,
+  sessionId: string | number
+): Uint8Array {
+  const out: number[] = [];
+  pushTag(out, 1, 2);
+  pushVarint(out, authPayload.length);
+  for (const b of authPayload) {
+    out.push(b);
+  }
+  pushUint64(out, 2, sessionId);
+  return new Uint8Array(out);
+}
+
 // --- WebSocket relay connection with an awaitable inbound frame queue --------
 export class RelayClient {
   protected ws?: WebSocket;
   protected readonly queue: RelayFrame[] = [];
   protected waiters: Array<() => void> = [];
   protected requestId = 0;
+  protected receiptSentForRelay?: string;
   closed = false;
 
   constructor(
@@ -236,6 +275,31 @@ export class RelayClient {
   }
   sendSessionHello(packedHello: Uint8Array): void {
     this.sendFrame(RelayType.SessionHello, packedHello);
+  }
+
+  // Acknowledges the relay that is serving this session so it can collect its
+  // ADR-005 fee. Sent right after the hello rather than at settlement: the
+  // signed bytes cover (chain_id, session_id, relay_id) and nothing about the
+  // outcome, so an early receipt is exactly as true as a late one — while the
+  // chain still refuses to pay unless the session reaches SETTLED with this
+  // relay assigned and answering. Sending it late made it the last frame before
+  // teardown, with no ack and no retry.
+  //
+  // Latched per relay id, not per connection: a failover to a backup relay is a
+  // different payee and a receipt signed over relay X is worthless at relay Y.
+  sendRewardReceipt(
+    relayId: string,
+    sessionId: string | number,
+    authPayload: Uint8Array
+  ): void {
+    if (!relayId || this.receiptSentForRelay === relayId) {
+      return;
+    }
+    this.sendFrame(
+      RelayType.Receipt,
+      encodeRelayReceipt(authPayload, sessionId)
+    );
+    this.receiptSentForRelay = relayId;
   }
   sendStream(packedGameFrame: Uint8Array): void {
     this.sendFrame(RelayType.StreamData, packedGameFrame);

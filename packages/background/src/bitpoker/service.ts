@@ -55,8 +55,11 @@ import {
 const ALLOWED_PAYLOAD_PREFIXES = [
   // Relay ClientHello auth ("cosmos-signature-v1"), relay_protocol.cpp
   "bitpoker-relay-client-hello-v1\n",
-  // Relay reward receipt (ADR-005 / M5.3)
-  "bitpoker-relay-receipt-v1\n",
+  // Relay reward receipt (ADR-005 / M5.3). v2 added the chain id to the signed
+  // bytes; the C++ and Go signers moved with it but this allowlist did not, so
+  // every browser-signed receipt was rejected here before it could be sent —
+  // which is why browser seats never acknowledged their relay at all.
+  "bitpoker-relay-receipt-v2\n",
   // submit-session-evidence authentication (ADR-003)
   "bitpoker-session-evidence-v1\n",
 ];
