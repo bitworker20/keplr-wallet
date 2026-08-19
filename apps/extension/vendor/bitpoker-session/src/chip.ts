@@ -116,11 +116,12 @@ export function uchipEquals(a: string, b: string): boolean {
 
 // --- Compact display amounts -------------------------------------------------
 //
-// Blinds are a percentage of the effective stack and are recomputed every
-// hand, so from the second hand on almost every amount is a six-decimal
-// fraction ("0.761904"). Those strings set the width of seat plates, action
-// buttons and log lines, and on a narrow screen they push the felt past the
-// edge. Four decimals is 0.0001 CHIP = 100 uchip of display precision.
+// Amounts on the felt are arbitrary uchip integers: blinds are 1% of the
+// starting stack, but a shove is capped at whatever the short stack has left
+// and a split pot leaves an odd chip, so from the second hand on almost every
+// amount is a six-decimal fraction ("0.761904"). Those strings set the width
+// of seat plates, action buttons and log lines, and on a narrow screen they
+// push the felt past the edge. Four decimals is 0.0001 CHIP = 100 uchip of display precision.
 //
 // Rounding is AWAY FROM ZERO, not to nearest: a number the player is about to
 // pay must never be shown as less than it is. (The Qt client does the same —
