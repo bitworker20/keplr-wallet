@@ -7,6 +7,7 @@
 // connect() gets no authScheme); chain sessions pass authScheme
 // "cosmos-signature-v1" with a signature obtained via the background
 // BitpokerSignPayloadMsg (see controller.joinChain).
+import { PEER_SILENCE_MS } from "./session-timing";
 
 export enum RelayType {
   ClientHello = 1,
@@ -244,8 +245,29 @@ export class RelayClient {
     this.sendFrame(RelayType.StreamData, packedGameFrame);
   }
 
+  // The sequence this connection has reached. A native peer de-duplicates
+  // inbound stream frames by this number and never lowers its high-water mark
+  // (relay_session_services.cpp isDuplicateStreamFrame), so a replacement
+  // connection that restarted at 1 would have every frame it sends silently
+  // dropped — the hand would stall and the peer would dispute it. Carry this
+  // into the reconnected client with continueSequenceFrom().
+  get sentSequence(): number {
+    return this.requestId;
+  }
+
+  // Seeds the outbound sequence so it stays monotonic across a reconnect.
+  // Call before connect(): the ClientHello consumes a number too.
+  continueSequenceFrom(sequence: number): void {
+    this.requestId = Math.max(this.requestId, sequence);
+  }
+
   // Resolves with the next inbound frame, or null on close/timeout.
-  nextFrame(timeoutMs = 30000): Promise<RelayFrame | null> {
+  //
+  // The default is the peer-silence budget rather than a round number: a
+  // caller that treats this timeout as "the peer is gone" and picks its own
+  // shorter value is how a thinking opponent used to get disputed. Pass
+  // something smaller only where a null result is not read as a disconnect.
+  nextFrame(timeoutMs = PEER_SILENCE_MS): Promise<RelayFrame | null> {
     if (this.queue.length > 0) {
       return Promise.resolve(this.queue.shift() ?? null);
     }

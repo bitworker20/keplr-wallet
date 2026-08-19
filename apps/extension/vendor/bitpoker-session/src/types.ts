@@ -34,6 +34,38 @@ export interface ZjhPlayer {
   folded: boolean;
 }
 
+// The peer's latest betting move, as the gamecore saw it. `seq` is monotonic
+// per session so a poller can append to a move log exactly once; `label` is a
+// stable English tag (FOLD/CHECK/CALL/BET/RAISE/ALLIN, plus LOOK/COMPARE for
+// ZhaJinHua) that the UI localizes and pairs with its own amount formatting.
+export interface PeerAction {
+  seq: number;
+  label: string;
+  amount: number;
+}
+
+// How a hand ended, captured by the gamecore at settlement (the next hand
+// destroys the core that knows it). Mirrors the native HandResult so the web
+// and desktop clients tell the player the same story.
+export interface HandResult {
+  handNumber: number;
+  // 0 = split / no change, 1 = local player, 2 = opponent.
+  winner: number;
+  pot: number;
+  myStack: number;
+  oppStack: number;
+  // Change in this seat's session chips over the hand, signed.
+  myDelta: number;
+  // Empty unless the hand reached a real compare — a fold leaves nothing to
+  // rank, and that absence is how the UI decides whether to show a comparison.
+  myHandRank: string;
+  oppHandRank: string;
+  myBestCards: TableCard[];
+  oppBestCards: TableCard[];
+  // The opponent's revealed cards; empty when they folded uncalled.
+  oppCards: TableCard[];
+}
+
 export interface TableState {
   ready: boolean;
   game?: "TH" | "ZJH";
@@ -64,6 +96,10 @@ export interface TableState {
   // for ZJH, the stack figure (session chips - committed) bet bounds need.
   sessionFirstChips?: number;
   sessionSecondChips?: number;
+  // Set once the peer has made a move this session; see PeerAction.
+  peerAction?: PeerAction;
+  // Set once at least one hand has settled; replaced at each settlement.
+  handResult?: HandResult;
   // ZJH-specific
   ante?: number;
   currentDarkBet?: number;

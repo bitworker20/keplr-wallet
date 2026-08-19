@@ -26,7 +26,20 @@ import {
   rememberSessionIdentity,
 } from "./session-vault";
 import { PokerWorkerClient } from "./worker-client";
-import { HandEffect, MatchedResult, TableState } from "./types";
+import {
+  HandEffect,
+  MatchedResult,
+  PokerActionKind,
+  TableState,
+} from "./types";
+import { SettlementReport, buildSettlementReport } from "./settlement-report";
+import {
+  ACTION_TIMEOUT_MS,
+  PEER_SILENCE_MS,
+  RESUME_ATTEMPTS,
+  RESUME_CONNECT_TIMEOUT_MS,
+  resumeDelayMs,
+} from "./session-timing";
 
 const hexToBytes = (hex: string): Uint8Array => {
   const out = new Uint8Array(hex.length / 2);
@@ -46,6 +59,25 @@ const bytesToHex = (bytes: Uint8Array): string =>
 // enough for a slow one and short enough that a chain with no answering relay
 // at all still reports the problem promptly.
 const UNGATED_ANSWER_GRACE_MS = 30000;
+
+// Labels for locally submitted actions, indexed by PokerActionKind. ZJH's
+// extra kinds (Look = 5, Compare = 6) collide with AllIn = 5 in the TH enum,
+// so the game decides the tail; see localActionLabels().
+const TH_ACTION_LABELS = ["FOLD", "CHECK", "CALL", "BET", "RAISE", "ALLIN"];
+const ZJH_ACTION_LABELS = [
+  "FOLD",
+  "CHECK",
+  "CALL",
+  "BET",
+  "RAISE",
+  "LOOK",
+  "COMPARE",
+];
+
+// Keeping the whole history of a long session in the snapshot buys nothing —
+// nobody scrolls back past the last few streets — and every entry is copied on
+// each append.
+const MAX_ACTION_LOG = 60;
 
 export type PokerGame = "TH" | "ZJH";
 
@@ -110,6 +142,29 @@ export interface GameSnapshot {
   wait: number;
   // The local "keep playing after this hand" wish (multi-hand).
   continueWish?: boolean;
+  // Epoch millis by which the local player must act, or the client folds for
+  // them (see session-timing). Present only while it is their turn, so the UI
+  // can render a countdown; absent otherwise.
+  actionDeadline?: number;
+  // Set while a dropped transport is being reconnected, so the UI can say the
+  // link is being rebuilt instead of showing a table that has quietly stopped.
+  resuming?: boolean;
+  // What the chain will pay this seat, once the session result is built.
+  // Present only for on-chain sessions.
+  settlement?: SettlementReport;
+  // Every move both seats made, oldest first. Amounts stay in the engine's
+  // unit; the UI formats them, since only it knows the display denom.
+  actionLog?: ActionLogEntry[];
+}
+
+export interface ActionLogEntry {
+  handNumber: number;
+  // true = the local player, false = the opponent.
+  mine: boolean;
+  // Stable English tag from the gamecore (FOLD/CHECK/CALL/BET/RAISE/ALLIN,
+  // plus LOOK/COMPARE for ZhaJinHua).
+  label: string;
+  amount: number;
 }
 
 export class PokerGameController {
@@ -119,6 +174,20 @@ export class PokerGameController {
   protected matched?: MatchedResult;
   protected sessionHello?: Uint8Array;
   protected running = false;
+
+  // Rebuilds the relay link after it drops, with fresh auth material where the
+  // scheme needs it. Set once the first connect succeeds; undefined means this
+  // session has no way back and a dropped link goes straight to escalation.
+  protected reconnect?: (fromSequence: number) => Promise<RelayClient>;
+  // Fires when the local player has sat on their turn for ACTION_TIMEOUT_MS.
+  protected actionTimer?: ReturnType<typeof setTimeout>;
+  // Set while the timeout fold is being submitted, so the status message it
+  // emits on the way out does not look like the start of a fresh turn and arm
+  // another clock.
+  protected autoFolding = false;
+  // Highest peerAction.seq already folded into the log, so polling tableState
+  // appends each opponent move exactly once.
+  protected loggedPeerSeq = 0;
 
   // On-chain session state (joinChain mode).
   protected chainSession?: any;
@@ -176,7 +245,62 @@ export class PokerGameController {
 
   protected emit(partial: Partial<GameSnapshot>): void {
     this.snapshot = { ...this.snapshot, ...partial };
+    // Every path that can start or end the local player's turn goes through
+    // here, so this is the one place the action clock has to be kept honest.
+    this.syncActionTimer();
     this.onSnapshot(this.snapshot);
+  }
+
+  // Runs the local player's action clock: armed for as long as it is their
+  // turn, cleared the moment it stops being. Without it a player who thinks
+  // for longer than the peer's silence budget is indistinguishable from one
+  // who walked away, and the opponent escalates a live hand to a dispute.
+  protected syncActionTimer(): void {
+    const myTurn =
+      this.running &&
+      this.snapshot.stage === "playing" &&
+      this.snapshot.wait === 0;
+
+    if (!myTurn) {
+      if (this.actionTimer !== undefined) {
+        clearTimeout(this.actionTimer);
+        this.actionTimer = undefined;
+      }
+      if (this.snapshot.actionDeadline !== undefined) {
+        this.snapshot = { ...this.snapshot, actionDeadline: undefined };
+      }
+      return;
+    }
+    // Already counting down this turn — re-emitting a table refresh must not
+    // hand the player a fresh minute.
+    if (this.actionTimer !== undefined || this.autoFolding) {
+      return;
+    }
+    this.snapshot = {
+      ...this.snapshot,
+      actionDeadline: Date.now() + ACTION_TIMEOUT_MS,
+    };
+    this.actionTimer = setTimeout(() => {
+      this.actionTimer = undefined;
+      void this.foldOnTimeout();
+    }, ACTION_TIMEOUT_MS);
+  }
+
+  // Folding for an absent player loses them the hand; letting the clock run
+  // loses them the whole escrow, because the opponent's silence budget expires
+  // and the session goes to adjudication with this seat at fault.
+  protected async foldOnTimeout(): Promise<void> {
+    if (!this.running || this.snapshot.wait !== 0) {
+      return;
+    }
+    this.autoFolding = true;
+    try {
+      this.emit({ message: "no action in time — folded automatically" });
+      // Fold is action kind 0 in both games (PokerActionKind / ZjhActionKind).
+      await this.act(PokerActionKind.Fold, 0);
+    } finally {
+      this.autoFolding = false;
+    }
   }
 
   async join(opts: JoinOptions): Promise<void> {
@@ -193,16 +317,24 @@ export class PokerGameController {
       await this.worker.newHand(this.game);
       await this.worker.setContinueWish(this.continueWish);
 
-      this.relay = new RelayClient(opts.relayUrl);
-      await this.relay.connect({
-        playerName: opts.playerName,
-        networkAddress: `keplr://${opts.playerName}`,
-        chainId: opts.chainId,
-        accountAddress: opts.accountAddress,
-        sessionId: opts.sessionId,
-        relayId: opts.relayId,
-        playerSessionPubkey: "keplr-dev",
-      });
+      // The dev handshake carries no signed, time-bound material, so a
+      // reconnect is the same call again.
+      const connect = async (fromSequence = 0): Promise<RelayClient> => {
+        const relay = new RelayClient(opts.relayUrl);
+        relay.continueSequenceFrom(fromSequence);
+        await relay.connect({
+          playerName: opts.playerName,
+          networkAddress: `keplr://${opts.playerName}`,
+          chainId: opts.chainId,
+          accountAddress: opts.accountAddress,
+          sessionId: opts.sessionId,
+          relayId: opts.relayId,
+          playerSessionPubkey: "keplr-dev",
+        });
+        return relay;
+      };
+      this.relay = await connect();
+      this.reconnect = connect;
 
       this.sessionHello = await this.worker.buildSessionHello({
         name: opts.playerName,
@@ -474,36 +606,44 @@ export class PokerGameController {
       );
 
       // cosmos-signature-v1 relay auth: timestamp + nonce are part of the
-      // signed text, so fix them before signing.
-      const timestampMillis = Date.now();
-      const nonce =
-        Math.random().toString(36).slice(2) + Date.now().toString(36);
-      const signText = buildHelloSigningPayload({
-        chainId: opts.chainId,
-        accountAddress: address,
-        networkAddress: address,
-        sessionId,
-        relayId,
-        playerSessionPubkey: sessionPubkeyHex,
-        timestampMillis,
-        nonce,
-      });
-      const signed = await this.wallet.signPayload(opts.chainId, signText);
+      // signed text, so they are fixed per connection and a reconnect has to
+      // sign a fresh pair — the relay rejects a replayed hello. signPayload is
+      // non-interactive on both bridges, so this never prompts mid-hand.
+      const connect = async (fromSequence = 0): Promise<RelayClient> => {
+        const timestampMillis = Date.now();
+        const nonce =
+          Math.random().toString(36).slice(2) + Date.now().toString(36);
+        const signText = buildHelloSigningPayload({
+          chainId: opts.chainId,
+          accountAddress: address,
+          networkAddress: address,
+          sessionId,
+          relayId,
+          playerSessionPubkey: sessionPubkeyHex,
+          timestampMillis,
+          nonce,
+        });
+        const signed = await this.wallet.signPayload(opts.chainId, signText);
 
-      this.relay = new RelayClient(relayEndpoint, relaySubprotocols);
-      await this.relay.connect({
-        playerName: opts.playerName,
-        networkAddress: address,
-        chainId: opts.chainId,
-        accountAddress: address,
-        sessionId,
-        relayId,
-        playerSessionPubkey: sessionPubkeyHex,
-        authScheme: "cosmos-signature-v1",
-        authPayload: hexToBytes(signed.signature),
-        timestampMillis,
-        nonce,
-      });
+        const relay = new RelayClient(relayEndpoint, relaySubprotocols);
+        relay.continueSequenceFrom(fromSequence);
+        await relay.connect({
+          playerName: opts.playerName,
+          networkAddress: address,
+          chainId: opts.chainId,
+          accountAddress: address,
+          sessionId,
+          relayId,
+          playerSessionPubkey: sessionPubkeyHex,
+          authScheme: "cosmos-signature-v1",
+          authPayload: hexToBytes(signed.signature),
+          timestampMillis,
+          nonce,
+        });
+        return relay;
+      };
+      this.relay = await connect();
+      this.reconnect = connect;
 
       // The matched session's stake is authoritative (a range intent can match
       // anywhere inside the overlap) — the in-game chips must mirror it on
@@ -535,23 +675,54 @@ export class PokerGameController {
     // Optimistically leave the "our turn" state so double-clicks are inert;
     // refresh() below restores the real wait from the gamecore.
     this.emit({ wait: 1 });
+    this.appendAction({
+      handNumber: this.snapshot.table?.handNumber ?? 1,
+      mine: true,
+      label: this.localActionLabel(kind),
+      amount,
+    });
     await this.applyEffect(await this.worker.onLocalAction(kind, amount));
     await this.refresh();
   }
 
+  // The move log is append-only and lives in the snapshot rather than being
+  // reconstructed from chip deltas, which is guesswork the moment a hand has
+  // blinds, an all-in or a split.
+  protected localActionLabel(kind: number): string {
+    const labels = this.game === "ZJH" ? ZJH_ACTION_LABELS : TH_ACTION_LABELS;
+    return labels[kind] ?? String(kind);
+  }
+
+  protected appendAction(entry: ActionLogEntry): void {
+    const log = [...(this.snapshot.actionLog ?? []), entry];
+    // Bound it: a long multi-hand session should not grow the snapshot without
+    // limit, and nobody scrolls back further than this.
+    this.emit({ actionLog: log.slice(-MAX_ACTION_LOG) });
+  }
+
   protected async pump(): Promise<void> {
     while (this.running && this.relay) {
-      // A missing frame for this long mid-hand is treated as a disconnect
-      // (matches bitpoker's NETWORK_MESSAGE_TIMEOUT); in a chain session it
-      // escalates to the dispute path.
-      const frame = await this.relay.nextFrame(30000);
-      if (this.snapshot.stage === "done") {
+      // Hearing nothing for this long means the peer is gone, NOT that it is
+      // thinking: one budget covers both seats' action clocks plus grace, and
+      // the local seat's clock (syncActionTimer) is what keeps our own half of
+      // that promise. See session-timing.ts for the arithmetic.
+      const frame = await this.relay.nextFrame(PEER_SILENCE_MS);
+      // finish() tears the link down from outside this loop, which wakes the
+      // read with no frame; that is a finished hand, not a lost peer.
+      if (this.snapshot.stage === "done" || !this.running) {
         return;
       }
       if (!frame) {
         const reason = this.relay.closed
           ? "relay connection closed"
-          : "timed out waiting for the opponent";
+          : "the opponent has gone quiet";
+        // A broken transport is not an abandoned session. Rebuild the link and
+        // let the gamecore replay what was missed before spending the escrow
+        // on a dispute — a dropped websocket is a normal event on a laptop lid
+        // or a network handover.
+        if (await this.resumeTransport(reason)) {
+          continue;
+        }
         // On-chain session interrupted mid-hand: escalate to the chain dispute
         // path (submit evidence + secret -> DISPUTED) instead of just failing,
         // so the escrow is protected and the hand can be adjudicated. Only once
@@ -580,7 +751,12 @@ export class PokerGameController {
         this.emit({
           stage: "playing",
           matched,
-          message: `matched: ${matched.firstName} vs ${matched.secondName}, bet ${matched.betAmount}`,
+          // The stake stays OUT of this string: it is in the engine's own
+          // unit (uchip), and this controller has no business deciding how
+          // money is displayed. The UI renders snapshot.matched.betAmount
+          // through its own formatter — "bet 1000000" next to a felt reading
+          // "1 CHIP" is the same number twice in two units.
+          message: `matched: ${matched.firstName} vs ${matched.secondName}`,
         });
         await this.applyEffect(await this.worker.start());
         await this.refresh();
@@ -615,6 +791,89 @@ export class PokerGameController {
     await new Promise((resolve) => setTimeout(resolve, ms));
   }
 
+  // Rebuilds a dropped relay link and hands the recovery to the gamecore.
+  //
+  // Two layers heal a mid-hand disconnect. This is the transport one: a fresh
+  // websocket with a fresh ClientHello, which the relay treats as a rejoin and
+  // which supersedes the half-open connection it may still be holding. The
+  // game layer follows immediately — makeResyncFrame() tells the peer how far
+  // our transcript got, the peer replays what we missed and answers with its
+  // own state, and duplicate replays are dropped idempotently by MsgID. Both
+  // sides of that already exist in the gamecore; only this reconnect was
+  // missing, which is why a brief network blip used to cost a dispute.
+  //
+  // Returns true when the link is back and the pump should keep reading.
+  protected async resumeTransport(reason: string): Promise<boolean> {
+    // Before the match there is no hand to replay and no escrow at stake, so
+    // join()/joinChain() are better placed to report the failure.
+    if (!this.reconnect || !this.matched || !this.running) {
+      return false;
+    }
+    for (let attempt = 1; attempt <= RESUME_ATTEMPTS; attempt++) {
+      // Where our outbound stream numbering has to pick up (see
+      // RelayClient.sentSequence): a peer that has already seen frames 1..n
+      // discards anything numbered below that. Re-read per attempt, since a
+      // half-successful attempt may have advanced it.
+      const fromSequence = this.relay?.sentSequence ?? 0;
+      this.emit({
+        resuming: true,
+        message: `${reason} — reconnecting (${attempt}/${RESUME_ATTEMPTS})…`,
+      });
+      // First attempt is immediate: the common case is a relay that bounced
+      // and is already back. Later ones back off, matching native.
+      if (attempt > 1) {
+        await this.hold(resumeDelayMs(attempt - 1));
+        if (!this.running) {
+          return false;
+        }
+      }
+      try {
+        const relay = await this.withConnectTimeout(
+          this.reconnect(fromSequence)
+        );
+        // The old socket may still be half-open; the relay has already
+        // superseded it, but our own reader must stop waiting on it.
+        this.relay?.close();
+        this.relay = relay;
+        relay.sendStream(await this.worker.makeResyncFrame());
+        this.emit({
+          resuming: false,
+          message: "reconnected — replaying the hand with the opponent…",
+        });
+        return true;
+      } catch (e: any) {
+        console.warn(
+          `relay resume attempt ${attempt} failed: ${e?.message ?? e}`
+        );
+      }
+    }
+    this.emit({ resuming: false });
+    return false;
+  }
+
+  // A connect that never settles would leave the player with neither a game
+  // nor an escalation path, so every attempt is bounded.
+  protected async withConnectTimeout(
+    pending: Promise<RelayClient>
+  ): Promise<RelayClient> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        pending,
+        new Promise<RelayClient>((_resolve, reject) => {
+          timer = setTimeout(
+            () => reject(new Error("relay reconnect timed out")),
+            RESUME_CONNECT_TIMEOUT_MS
+          );
+        }),
+      ]);
+    } finally {
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
+    }
+  }
+
   protected async applyEffect(eff: HandEffect): Promise<void> {
     if (!this.relay) {
       return;
@@ -639,6 +898,18 @@ export class PokerGameController {
     }
     const table = await this.worker.tableState();
     this.emit({ table });
+    // The gamecore reports only the peer's LATEST move, with a monotonic seq;
+    // anything newer than what we logged is a move we have not recorded yet.
+    const peerAction = table?.peerAction;
+    if (peerAction && peerAction.seq > this.loggedPeerSeq) {
+      this.loggedPeerSeq = peerAction.seq;
+      this.appendAction({
+        handNumber: table?.handNumber ?? 1,
+        mine: false,
+        label: peerAction.label,
+        amount: peerAction.amount,
+      });
+    }
   }
 
   protected async finish(): Promise<void> {
@@ -678,6 +949,19 @@ export class PokerGameController {
       if (result.error) {
         throw new Error(result.error);
       }
+      // Reconcile before submitting, so the figures are on screen even if the
+      // tx fails — a player whose result did not go out still needs to know
+      // what the table decided and that the escrow is still locked.
+      const reconcile = (submitted: boolean) =>
+        buildSettlementReport({
+          sessionId: String(session.session_id),
+          localIsPlayerA: this.chainAddress === session.player_a,
+          stake: String(session.stake),
+          amounts: result,
+          submitted,
+        });
+      this.emit({ settlement: reconcile(false) });
+
       const tx = await this.wallet.submitResult(this.chainId, {
         sessionId: String(session.session_id),
         winner: result.winner ?? "",
@@ -694,6 +978,7 @@ export class PokerGameController {
       }
       this.emit({
         chain: { ...this.snapshot.chain, resultTxHash: tx.txHash },
+        settlement: reconcile(true),
         message: `result submitted (${tx.txHash.slice(
           0,
           12
