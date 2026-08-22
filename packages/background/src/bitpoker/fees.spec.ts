@@ -1,7 +1,13 @@
 // Pins this copy of the fee arithmetic against the same cases as
 // webapp/packages/poker-session/src/fees.spec.ts in the BitPoker monorepo. If
 // one side changes, this fails and says so.
-import { adjustGas, feeForGas, parseGasPrices, pickGasPrice } from "./fees";
+import {
+  adjustGas,
+  evidenceGasFloor,
+  feeForGas,
+  parseGasPrices,
+  pickGasPrice,
+} from "./fees";
 
 describe("bitpoker fee arithmetic", () => {
   it("reads what the node service actually returns", () => {
@@ -39,5 +45,11 @@ describe("bitpoker fee arithmetic", () => {
     expect(adjustGas(100000)).toBe("140000");
     expect(adjustGas(100000, 1.4, 400000)).toBe("400000");
     expect(adjustGas(500000, 1.4, 400000)).toBe("700000");
+  });
+
+  it("scales the evidence fallback with its payload", () => {
+    expect(evidenceGasFloor(0)).toBe("400000");
+    expect(evidenceGasFloor(16 * 1024)).toBe("1383040");
+    expect(evidenceGasFloor(1024 * 1024)).toBe("40000000");
   });
 });

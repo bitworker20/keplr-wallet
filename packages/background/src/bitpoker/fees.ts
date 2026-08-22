@@ -31,6 +31,9 @@ export interface Coin {
 }
 
 export const DEFAULT_GAS_ADJUSTMENT = 1.4;
+const EVIDENCE_GAS_BASE = 400000;
+const EVIDENCE_GAS_PER_BYTE = 60;
+const MAX_EVIDENCE_GAS = 40000000;
 
 const DEC_PLACES = 18;
 const DEC_ONE = BigInt("1" + "0".repeat(DEC_PLACES));
@@ -95,6 +98,20 @@ export function adjustGas(
   floor = 0
 ): string {
   return String(Math.max(Math.ceil(gasUsed * adjustment), Math.ceil(floor)));
+}
+
+// A dispute evidence tx carries the full protobuf transcript. Keep this in
+// sync with webapp/packages/poker-session/src/fees.ts and the C++ gas floors.
+export function evidenceGasFloor(payloadBytes: number): string {
+  if (!Number.isSafeInteger(payloadBytes) || payloadBytes < 0) {
+    throw new Error("evidence payload size must be a non-negative integer");
+  }
+  return String(
+    Math.min(
+      EVIDENCE_GAS_BASE + EVIDENCE_GAS_PER_BYTE * payloadBytes,
+      MAX_EVIDENCE_GAS
+    )
+  );
 }
 
 // What the node charges, or undefined when it will not say.

@@ -125,14 +125,15 @@ describe("sessionRecovery", () => {
     const s = session({
       status: "GAME_SESSION_STATUS_DISPUTED",
       dispute_deadline_height: "400",
+      dispute_refund_height: "900",
     });
-    const beforeHatch = sessionRecovery(s, 400 + 14400 - 1, ME, {
+    const beforeHatch = sessionRecovery(s, 899, ME, {
       evidenceOnChain: true,
     });
     expect(beforeHatch.action).toBe("adjudicate");
     expect(beforeHatch.kind).toBe("ready");
 
-    const atHatch = sessionRecovery(s, 400 + 14400, ME, {
+    const atHatch = sessionRecovery(s, 900, ME, {
       evidenceOnChain: true,
     });
     expect(atHatch.kind).toBe("ready");
@@ -140,16 +141,28 @@ describe("sessionRecovery", () => {
     expect(atHatch.reason).toMatch(/without the engine/);
   });
 
-  it("keeps preferring reveal over the refund hatch", () => {
+  it("does not reveal a secret after the engine-independent refund opens", () => {
     const s = session({
       status: "GAME_SESSION_STATUS_DISPUTED",
       dispute_deadline_height: "400",
+      dispute_refund_height: "900",
     });
     const held = sessionRecovery(s, 99999, ME, {
       heldSecret: true,
       evidenceOnChain: true,
     });
-    expect(held.action).toBe("reveal");
+    expect(held.action).toBe("refund");
+  });
+
+  it("does not guess a refund height for unmigrated legacy state", () => {
+    const s = session({
+      status: "GAME_SESSION_STATUS_DISPUTED",
+      dispute_deadline_height: "400",
+    });
+    const recovery = sessionRecovery(s, 99999, ME, {
+      evidenceOnChain: true,
+    });
+    expect(recovery.action).toBe("adjudicate");
   });
 
   it("offers nothing on a dispute with no evidence and no deadline", () => {

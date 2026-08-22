@@ -14,10 +14,9 @@
 //                                       can decide, once
 //                                       result_deadline_height passes
 //                                       (~100s at the default params)
-//   DISPUTED, long past its deadline    pure refund with no engine, once
-//                                       dispute_deadline +
-//                                       dispute_refund_timeout_blocks
-//                                       (~20h past the dispute window). This
+//   DISPUTED, long past its deadline    pure refund with no engine, once the
+//                                       session's snapshotted
+//                                       dispute_refund_height passes. This
 //                                       is the backstop for when adjudication
 //                                       itself cannot run (node without cgo,
 //                                       out-of-gas on a huge transcript).
@@ -57,6 +56,9 @@ export interface ChainGameSession {
   player_a_intent_id?: string;
   player_b_intent_id?: string;
   dispute_deadline_height?: string;
+  // Snapshotted on entry to DISPUTED. Zero/absent means legacy state has not
+  // been migrated; never reconstruct it from mutable params in the client.
+  dispute_refund_height?: string;
   adjudication?: unknown;
 }
 
@@ -67,13 +69,7 @@ export interface DisputeContext {
   heldSecret?: boolean;
   // Somebody has submitted evidence, so the engine has a hand to replay.
   evidenceOnChain?: boolean;
-  // Chain param dispute_refund_timeout_blocks. Default matches the chain's
-  // DefaultDisputeRefundTimeoutBlocks (14400). 0 means the hatch is disabled.
-  disputeRefundTimeoutBlocks?: number;
 }
-
-// Matches types.DefaultDisputeRefundTimeoutBlocks on chain.
-export const DEFAULT_DISPUTE_REFUND_TIMEOUT_BLOCKS = 14400;
 
 // Whether the claim can be sent yet.
 export type RecoveryKind =
@@ -184,6 +180,24 @@ export function sessionRecovery(
   }
 
   if (session.status === DISPUTED) {
+    const refundAt = Number(session.dispute_refund_height ?? "0");
+    // Once the engine-independent exit is open, do not disclose a secret just
+    // to attempt a verdict first. The chain has already reserved the entire
+    // permissionless-adjudication window; refunding now avoids needless key
+    // disclosure and is the one route that works without the engine.
+    if (
+      Number.isSafeInteger(refundAt) &&
+      refundAt > 0 &&
+      chainHeight >= refundAt
+    ) {
+      return {
+        kind: "ready",
+        action: "refund",
+        atHeight: refundAt,
+        reason:
+          "dispute unresolved past the adjudication window; both stakes can be refunded without the engine",
+      };
+    }
     // Reveal before verdict: an undisclosed secret is scored as a forfeit, so
     // asking for a verdict while still holding one throws the hand away.
     if (dispute.heldSecret) {
@@ -197,26 +211,6 @@ export function sessionRecovery(
       };
     }
     const deadline = Number(session.dispute_deadline_height ?? "0");
-    const refundTimeout =
-      dispute.disputeRefundTimeoutBlocks ??
-      DEFAULT_DISPUTE_REFUND_TIMEOUT_BLOCKS;
-    // Still DISPUTED this far past the dispute deadline means adjudication
-    // never landed (out of gas, no engine, both players gone). The no-engine
-    // hatch via MsgClaimSessionTimeout is the only remaining exit — and only
-    // offered once the whole permissionless-adjudication window has elapsed,
-    // so a real verdict always had its chance first.
-    if (deadline > 0 && refundTimeout > 0) {
-      const refundAt = deadline + refundTimeout;
-      if (chainHeight >= refundAt) {
-        return {
-          kind: "ready",
-          action: "refund",
-          atHeight: refundAt,
-          reason:
-            "dispute unresolved past the adjudication window; both stakes can be refunded without the engine",
-        };
-      }
-    }
     if (dispute.evidenceOnChain) {
       return {
         kind: "ready",

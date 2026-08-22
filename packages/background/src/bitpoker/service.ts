@@ -19,6 +19,7 @@ import {
   adjustGas,
   Coin,
   DEFAULT_GAS_ADJUSTMENT,
+  evidenceGasFloor,
   feeForGas,
   fetchNodeGasPrice,
   GasPrice,
@@ -70,7 +71,6 @@ const ALLOWED_PAYLOAD_PREFIXES = [
 // far more than overpaying a fraction of a CHIP. Evidence carries the full
 // message-history payload, so it pays a per-byte write cost.
 const GAS_FLOOR_GAME = "400000";
-const GAS_FLOOR_EVIDENCE = "3000000";
 
 // Adjudication replays the disputed hand through the C++ engine inside the tx
 // and then pays out the verdict, so its cost tracks the length of the evidence
@@ -363,11 +363,12 @@ export class BitpokerService {
       throw new Error("bitpoker tx is only allowed for internal messages");
     }
     const { bech32Address } = await this.getKey(env, chainId);
+    const evidencePayload = Buffer.from(args.evidencePayloadHex, "hex");
     const msg = encodeMsgSubmitSessionEvidence({
       creator: bech32Address,
       sessionId: args.sessionId,
       evidenceHash: args.evidenceHash,
-      evidencePayload: Buffer.from(args.evidencePayloadHex, "hex"),
+      evidencePayload,
       evidenceSignature: args.evidenceSignature,
       reason: args.reason,
     });
@@ -375,7 +376,7 @@ export class BitpokerService {
       chainId,
       MSG_SUBMIT_SESSION_EVIDENCE_TYPE_URL,
       msg,
-      GAS_FLOOR_EVIDENCE
+      evidenceGasFloor(evidencePayload.length)
     );
   }
 
@@ -470,7 +471,8 @@ export class BitpokerService {
         cosmosInfo.rest,
         bodyBytes,
         encodeAuthInfo("0", []),
-        gasFloor
+        gasFloor,
+        typeUrl === MSG_ADJUDICATE_SESSION_TYPE_URL
       ),
       this.resolveGasPrice(cosmosInfo.rest, feeDenom),
     ]);
@@ -531,13 +533,15 @@ export class BitpokerService {
   }
 
   // Gas from a simulated run of this exact tx, never below the caller's floor.
-  // A node that declines to simulate leaves the tx on the floor alone — what
-  // this service sent unconditionally before.
+  // Adjudication fails closed if simulation is unavailable: engine and
+  // transcript cost cannot be bounded from MsgAdjudicateSession alone, and a
+  // blind floor recreates the out-of-gas retry loop this recovery path fixes.
   protected async resolveGasLimit(
     rest: string,
     bodyBytes: Uint8Array,
     authInfoBytes: Uint8Array,
-    gasFloor: string
+    gasFloor: string,
+    requireSimulation = false
   ): Promise<string> {
     try {
       const txBytes = TxRaw.encode({
@@ -550,7 +554,13 @@ export class BitpokerService {
         Buffer.from(txBytes).toString("base64")
       );
       return adjustGas(used, DEFAULT_GAS_ADJUSTMENT, Number(gasFloor));
-    } catch {
+    } catch (error) {
+      if (requireSimulation) {
+        const detail = error instanceof Error ? error.message : String(error);
+        throw new Error(
+          `could not simulate adjudication; refusing to broadcast with an unknown gas limit: ${detail}`
+        );
+      }
       return gasFloor;
     }
   }
