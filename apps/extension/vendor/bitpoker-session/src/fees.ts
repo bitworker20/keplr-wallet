@@ -33,6 +33,17 @@ export interface Coin {
   amount: string;
 }
 
+import {
+  adjudicateSessionFloor,
+  GAS_CANCEL_GAME_INTENT,
+  GAS_CLAIM_SESSION_TIMEOUT,
+  GAS_OPEN_GAME_INTENT,
+  GAS_SUBMIT_SESSION_RESULT,
+  GAS_SUBMIT_SESSION_SECRET,
+  MAX_STORED_EVIDENCE_BYTES,
+  submitSessionEvidenceFloor,
+} from "./gas-bounds.generated";
+
 // The simulated run never matches the real one exactly. 1.4 is what the Cosmos
 // CLI's `--gas auto` defaults to (1.0 with a 0.4 adjustment on top).
 export const DEFAULT_GAS_ADJUSTMENT = 1.4;
@@ -139,6 +150,37 @@ export function adjustGas(
 ): string {
   return String(Math.max(Math.ceil(gasUsed * adjustment), Math.ceil(floor)));
 }
+
+// Evidence carries the complete protobuf transcript, so its write cost scales
+// with payload bytes: a flat fallback recreates the exact failure mode that
+// stranded session 101 whenever simulation is unavailable. The coefficients are
+// the chain's own (ADR-008 §2.1) — see gas-bounds.generated.ts.
+export function evidenceGasFloor(payloadBytes: number): string {
+  return String(submitSessionEvidenceFloor(payloadBytes));
+}
+
+// What to reserve for an adjudication whose transcript size is unknown. Priced
+// for the largest transcript the chain will store, because guessing low does
+// not slow the transaction down — it fails it after CheckTx already reported
+// success, and the escrow stays locked.
+export function adjudicateGasFloor(evidencePayloadBytes?: number): string {
+  return String(
+    adjudicateSessionFloor(evidencePayloadBytes ?? MAX_STORED_EVIDENCE_BYTES)
+  );
+}
+
+// The per-message floor for the game messages whose cost does not scale with
+// any input the client controls.
+export const GAS_FLOOR_OPEN_GAME_INTENT = String(GAS_OPEN_GAME_INTENT);
+export const GAS_FLOOR_GAME_MESSAGE = String(
+  Math.max(
+    GAS_OPEN_GAME_INTENT,
+    GAS_CANCEL_GAME_INTENT,
+    GAS_SUBMIT_SESSION_RESULT,
+    GAS_SUBMIT_SESSION_SECRET,
+    GAS_CLAIM_SESSION_TIMEOUT
+  )
+);
 
 // ceil(gasLimit * price) in the price's denom, as an integer string — the same
 // rounding the SDK's fee check applies, so a fee computed here is accepted at

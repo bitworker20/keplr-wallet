@@ -19,7 +19,9 @@ import {
   adjustGas,
   Coin,
   DEFAULT_GAS_ADJUSTMENT,
+  adjudicateGasFloor,
   evidenceGasFloor,
+  GAS_FLOOR_GAME_MESSAGE,
   feeForGas,
   fetchNodeGasPrice,
   GasPrice,
@@ -42,6 +44,17 @@ import {
   MSG_SUBMIT_SESSION_SECRET_TYPE_URL,
   POKERCHAIN_GAME_TYPE_TH,
 } from "./proto-writer";
+
+// What a broadcast came back with, after DeliverTx. `codespace` is what makes
+// `code` meaningful: pokerchain's code 11 is not the SDK's out-of-gas, and a
+// caller that reads one without the other reprices a message the chain simply
+// refuses (ADR-008 §2.6, and @bitpoker/poker-session/tx-failure).
+export interface BitPokerTxResult {
+  txHash: string;
+  code: number;
+  codespace: string;
+  rawLog: string;
+}
 
 // The bitpoker protocol authenticates relay connections and on-chain dispute
 // evidence with a raw secp256k1 signature over sha256(payload) — the payload is
@@ -70,13 +83,13 @@ const ALLOWED_PAYLOAD_PREFIXES = [
 // there leaves the session RESULT_PENDING with the escrow locked, which costs
 // far more than overpaying a fraction of a CHIP. Evidence carries the full
 // message-history payload, so it pays a per-byte write cost.
-const GAS_FLOOR_GAME = "400000";
+const GAS_FLOOR_GAME = GAS_FLOOR_GAME_MESSAGE;
 
 // Adjudication replays the disputed hand through the C++ engine inside the tx
 // and then pays out the verdict, so its cost tracks the length of the evidence
 // transcript. It is also the only way a disputed escrow is ever released, so
 // it gets evidence-sized headroom rather than a tight estimate.
-const GAS_FLOOR_ADJUDICATE = "3000000";
+const GAS_FLOOR_ADJUDICATE = adjudicateGasFloor();
 
 // A simulated tx is never verified, but the signature slot must exist and be
 // the right length or the ante handler rejects the shape before measuring.
@@ -179,7 +192,7 @@ export class BitpokerService {
     env: Env,
     chainId: string,
     intentId: string
-  ): Promise<{ txHash: string; code: number; rawLog: string }> {
+  ): Promise<BitPokerTxResult> {
     if (!env.isInternalMsg) {
       throw new Error("bitpoker tx is only allowed for internal messages");
     }
@@ -199,7 +212,7 @@ export class BitpokerService {
     env: Env,
     chainId: string,
     sessionId: string
-  ): Promise<{ txHash: string; code: number; rawLog: string }> {
+  ): Promise<BitPokerTxResult> {
     if (!env.isInternalMsg) {
       throw new Error("bitpoker tx is only allowed for internal messages");
     }
@@ -218,7 +231,7 @@ export class BitpokerService {
     env: Env,
     chainId: string,
     sessionId: string
-  ): Promise<{ txHash: string; code: number; rawLog: string }> {
+  ): Promise<BitPokerTxResult> {
     if (!env.isInternalMsg) {
       throw new Error("bitpoker tx is only allowed for internal messages");
     }
@@ -242,7 +255,7 @@ export class BitpokerService {
       playerSessionPubkey: string;
       playerTransportPubkey?: string;
     }
-  ): Promise<{ txHash: string; code: number; rawLog: string }> {
+  ): Promise<BitPokerTxResult> {
     if (!env.isInternalMsg) {
       throw new Error("bitpoker tx is only allowed for internal messages");
     }
@@ -287,7 +300,7 @@ export class BitpokerService {
       playerSessionPubkey: string;
       playerTransportPubkey?: string;
     }
-  ): Promise<{ txHash: string; code: number; rawLog: string }> {
+  ): Promise<BitPokerTxResult> {
     const msg = encodeMsgOpenGameIntent({
       creator: bech32Address,
       gameType: args.gameType || POKERCHAIN_GAME_TYPE_TH,
@@ -319,7 +332,7 @@ export class BitpokerService {
       playerAAmount: string;
       playerBAmount: string;
     }
-  ): Promise<{ txHash: string; code: number; rawLog: string }> {
+  ): Promise<BitPokerTxResult> {
     if (!env.isInternalMsg) {
       throw new Error("bitpoker tx is only allowed for internal messages");
     }
@@ -358,7 +371,7 @@ export class BitpokerService {
       evidenceSignature: string;
       reason: string;
     }
-  ): Promise<{ txHash: string; code: number; rawLog: string }> {
+  ): Promise<BitPokerTxResult> {
     if (!env.isInternalMsg) {
       throw new Error("bitpoker tx is only allowed for internal messages");
     }
@@ -388,7 +401,7 @@ export class BitpokerService {
       sessionSecretKeyHex: string;
       sessionPubkeyHex: string;
     }
-  ): Promise<{ txHash: string; code: number; rawLog: string }> {
+  ): Promise<BitPokerTxResult> {
     if (!env.isInternalMsg) {
       throw new Error("bitpoker tx is only allowed for internal messages");
     }
@@ -412,7 +425,7 @@ export class BitpokerService {
     typeUrl: string,
     msgValue: Uint8Array,
     gasFloor: string
-  ): Promise<{ txHash: string; code: number; rawLog: string }> {
+  ): Promise<BitPokerTxResult> {
     const modularChainInfo =
       this.chainsService.getModularChainInfoOrThrow(chainId);
     if (
@@ -522,6 +535,7 @@ export class BitpokerService {
           return {
             txHash,
             code: Number(txResponse.code ?? 0),
+            codespace: String(txResponse.codespace ?? ""),
             rawLog: String(txResponse.raw_log ?? ""),
           };
         }

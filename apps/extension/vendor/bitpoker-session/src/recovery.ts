@@ -69,6 +69,12 @@ export interface DisputeContext {
   heldSecret?: boolean;
   // Somebody has submitted evidence, so the engine has a hand to replay.
   evidenceOnChain?: boolean;
+  // A MsgAdjudicateSession for this session has already been refused by the
+  // chain. Set it after an attempt comes back with a non-zero code — a
+  // validator built without the cgo engine rejects every one of them, and no
+  // amount of gas or patience changes that. It is the only thing that opens the
+  // no-engine refund, so the verdict always gets its chance first.
+  adjudicationRefused?: boolean;
 }
 
 // Whether the claim can be sent yet.
@@ -181,21 +187,30 @@ export function sessionRecovery(
 
   if (session.status === DISPUTED) {
     const refundAt = Number(session.dispute_refund_height ?? "0");
-    // Once the engine-independent exit is open, do not disclose a secret just
-    // to attempt a verdict first. The chain has already reserved the entire
-    // permissionless-adjudication window; refunding now avoids needless key
-    // disclosure and is the one route that works without the engine.
-    if (
-      Number.isSafeInteger(refundAt) &&
-      refundAt > 0 &&
-      chainHeight >= refundAt
-    ) {
+    const hatchOpen =
+      Number.isSafeInteger(refundAt) && refundAt > 0 && chainHeight >= refundAt;
+
+    // A VERDICT FIRST, always — even once the engine-independent hatch is open.
+    //
+    // This used to offer the refund the moment the hatch opened, on the
+    // reasoning that it avoided a needless key disclosure. That trade was never
+    // real: adjudication scores an UNDISCLOSED secret as a forfeit, so revealing
+    // is never worse for this seat than staying quiet, and the key is per-hand
+    // and spent the moment the hand was disputed (the chain refuses to let it be
+    // committed again). What it cost instead was the outcome — on a session
+    // where the engine would forfeit the other seat, whichever client polled
+    // first refunded, and "who ticks first" replaced the verdict as the
+    // settlement rule (ADR-008 §2.5).
+    //
+    // So the hatch is only offered once the chain has actually refused a
+    // verdict, which the caller reports through the dispute context.
+    if (hatchOpen && dispute.adjudicationRefused) {
       return {
         kind: "ready",
         action: "refund",
         atHeight: refundAt,
         reason:
-          "dispute unresolved past the adjudication window; both stakes can be refunded without the engine",
+          "the chain will not produce a verdict for this dispute; both stakes can be refunded without the engine",
       };
     }
     // Reveal before verdict: an undisclosed secret is scored as a forfeit, so
@@ -216,7 +231,10 @@ export function sessionRecovery(
         kind: "ready",
         action: "adjudicate",
         atHeight: 0,
-        reason: "under dispute — ask the chain for a verdict",
+        reason: hatchOpen
+          ? "under dispute — ask the chain for a verdict; if it cannot give one, " +
+            "a no-engine refund of both stakes is already available"
+          : "under dispute — ask the chain for a verdict",
       };
     }
     // No evidence was ever submitted, so the engine has nothing to replay and
@@ -290,7 +308,13 @@ export async function fetchHasEvidence(
 export async function fetchRecoverableSessions(
   lcdUrl: string,
   address: string,
-  chainHeight: number
+  chainHeight: number,
+  // Session ids whose adjudication this client has already seen the chain
+  // refuse. Without it a session on an engine-less node would offer "ask for a
+  // verdict" forever and never the refund that actually works; with it, the
+  // refund appears only after the verdict route has been tried and failed
+  // (ADR-008 §2.5).
+  adjudicationRefused: ReadonlySet<string> = new Set()
 ): Promise<RecoverableSession[]> {
   const base = lcdUrl.replace(/\/+$/, "");
   const out: RecoverableSession[] = [];
@@ -319,6 +343,7 @@ export async function fetchRecoverableSessions(
           ? {
               heldSecret: !!(intentId && sessionIdentityForIntent(intentId)),
               evidenceOnChain: await fetchHasEvidence(base, session.session_id),
+              adjudicationRefused: adjudicationRefused.has(session.session_id),
             }
           : {};
       const recovery = sessionRecovery(session, chainHeight, address, dispute);

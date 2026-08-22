@@ -117,31 +117,58 @@ describe("sessionRecovery", () => {
     expect(sessionRecovery(s, 400, ME).reason).toMatch(/refunds both stakes/);
   });
 
-  it("offers the no-engine refund hatch once adjudication had its whole window", () => {
+  it("keeps asking for a verdict even after the refund hatch opens", () => {
     // Session 101 shape: evidence on chain, still DISPUTED long after the
-    // dispute deadline because adjudication itself could not land. Prefer a
-    // real verdict while the hatch is closed; once it opens, ClaimSessionTimeout
-    // voids the escrow without the engine.
+    // dispute deadline. The hatch is a liveness backstop, not an alternative
+    // outcome — offering it while a verdict is still obtainable makes "whose
+    // client polls first" the settlement rule, and lets the seat that is about
+    // to lose the verdict refund its stake back out of it (ADR-008 §2.5).
     const s = session({
       status: "GAME_SESSION_STATUS_DISPUTED",
       dispute_deadline_height: "400",
       dispute_refund_height: "900",
     });
-    const beforeHatch = sessionRecovery(s, 899, ME, {
-      evidenceOnChain: true,
-    });
+
+    const beforeHatch = sessionRecovery(s, 899, ME, { evidenceOnChain: true });
     expect(beforeHatch.action).toBe("adjudicate");
     expect(beforeHatch.kind).toBe("ready");
 
-    const atHatch = sessionRecovery(s, 900, ME, {
-      evidenceOnChain: true,
-    });
+    const atHatch = sessionRecovery(s, 900, ME, { evidenceOnChain: true });
     expect(atHatch.kind).toBe("ready");
-    expect(atHatch.action).toBe("refund");
-    expect(atHatch.reason).toMatch(/without the engine/);
+    expect(atHatch.action).toBe("adjudicate");
+    // ...but say the backstop is there, so a player whose verdict keeps being
+    // refused knows the escrow is not stuck.
+    expect(atHatch.reason).toMatch(/no-engine refund/);
   });
 
-  it("does not reveal a secret after the engine-independent refund opens", () => {
+  it("offers the no-engine refund only once the chain refused a verdict", () => {
+    const s = session({
+      status: "GAME_SESSION_STATUS_DISPUTED",
+      dispute_deadline_height: "400",
+      dispute_refund_height: "900",
+    });
+
+    // Refused, but the window has not elapsed: keep trying for the verdict.
+    const early = sessionRecovery(s, 899, ME, {
+      evidenceOnChain: true,
+      adjudicationRefused: true,
+    });
+    expect(early.action).toBe("adjudicate");
+
+    const refused = sessionRecovery(s, 900, ME, {
+      evidenceOnChain: true,
+      adjudicationRefused: true,
+    });
+    expect(refused.kind).toBe("ready");
+    expect(refused.action).toBe("refund");
+    expect(refused.reason).toMatch(/without the engine/);
+  });
+
+  it("still reveals a held secret before asking for a verdict", () => {
+    // Revealing is never worse for this seat: an UNDISCLOSED secret is scored
+    // as a forfeit, and the key is per-hand and already spent. The old rule
+    // skipped the reveal to "avoid needless disclosure" and paid for it with
+    // the outcome.
     const s = session({
       status: "GAME_SESSION_STATUS_DISPUTED",
       dispute_deadline_height: "400",
@@ -151,7 +178,7 @@ describe("sessionRecovery", () => {
       heldSecret: true,
       evidenceOnChain: true,
     });
-    expect(held.action).toBe("refund");
+    expect(held.action).toBe("reveal");
   });
 
   it("does not guess a refund height for unmigrated legacy state", () => {

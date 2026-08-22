@@ -1,4 +1,12 @@
-import { adjustGas, feeForGas, parseGasPrices, pickGasPrice } from "./fees";
+import {
+  adjustGas,
+  adjudicateGasFloor,
+  evidenceGasFloor,
+  feeForGas,
+  parseGasPrices,
+  pickGasPrice,
+} from "./fees";
+import { MAX_MSG_GAS, MAX_STORED_EVIDENCE_BYTES } from "./gas-bounds.generated";
 
 describe("parseGasPrices", () => {
   it("reads what the node service actually returns", () => {
@@ -39,6 +47,44 @@ describe("pickGasPrice", () => {
   it("falls back to the first advertised price", () => {
     expect(pickGasPrice(prices, "nonesuch")?.denom).toBe("stake");
     expect(pickGasPrice([])).toBeUndefined();
+  });
+});
+
+describe("evidenceGasFloor", () => {
+  it("scales with the evidence payload", () => {
+    expect(evidenceGasFloor(0)).toBe("400000");
+    expect(evidenceGasFloor(16 * 1024)).toBe("1383040");
+    // The whole 1 MiB the chain accepts, priced linearly. The saturation guard
+    // must sit ABOVE this: clipping here would hand the caller a limit smaller
+    // than the real cost, which is the failure this table exists to prevent.
+    expect(evidenceGasFloor(1024 * 1024)).toBe("63314560");
+  });
+
+  it("saturates only on a nonsense payload size", () => {
+    expect(Number(evidenceGasFloor(1024 * 1024 * 1024))).toBe(MAX_MSG_GAS);
+  });
+
+  it("refuses a size that is not a byte count", () => {
+    expect(() => evidenceGasFloor(-1)).toThrow();
+    expect(() => evidenceGasFloor(1.5)).toThrow();
+  });
+});
+
+describe("adjudicateGasFloor", () => {
+  // Session 101: 515,703 bytes of evidence really cost 1,603,147 gas, against
+  // the 500,000 the clients promised and the 200,000 relayd's permissionless
+  // crank promised. Both numbers have to clear it now.
+  it("clears what session 101 actually cost", () => {
+    expect(Number(adjudicateGasFloor(515703))).toBeGreaterThan(1603147);
+  });
+
+  it("prices the largest stored transcript when the size is unknown", () => {
+    expect(adjudicateGasFloor()).toBe(
+      adjudicateGasFloor(MAX_STORED_EVIDENCE_BYTES)
+    );
+    expect(Number(adjudicateGasFloor())).toBeGreaterThan(
+      Number(adjudicateGasFloor(515703))
+    );
   });
 });
 

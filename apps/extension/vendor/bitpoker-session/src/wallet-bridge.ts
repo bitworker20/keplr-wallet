@@ -27,6 +27,10 @@ export interface PokerAccountKey {
 export interface PokerTxResult {
   txHash: string;
   code: number;
+  // Which error registry `code` belongs to; empty or "sdk" is the SDK's root
+  // one. Without it a module's code 11 is indistinguishable from the SDK's
+  // out-of-gas — see txFailureClass.
+  codespace?: string;
   rawLog: string;
 }
 
