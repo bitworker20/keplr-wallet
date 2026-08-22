@@ -14,17 +14,26 @@
 //                                       can decide, once
 //                                       result_deadline_height passes
 //                                       (~100s at the default params)
+//   DISPUTED, long past its deadline    pure refund with no engine, once
+//                                       dispute_deadline +
+//                                       dispute_refund_timeout_blocks
+//                                       (~20h past the dispute window). This
+//                                       is the backstop for when adjudication
+//                                       itself cannot run (node without cgo,
+//                                       out-of-gas on a huge transcript).
 //
-// A DISPUTED session is past that message and needs the other two, in order:
+// A DISPUTED session otherwise needs the other two, in order:
 //
 //   MsgSubmitSessionSecret              disclose this seat's per-hand key, so
 //                                       the engine scores the cards this
 //                                       player actually held instead of
 //                                       treating the hand as forfeited
-//   MsgAdjudicateSession                run the engine and pay out. Nothing
-//                                       else releases a disputed escrow, and
-//                                       until dispute_deadline_height only the
-//                                       two players may send it
+//   MsgAdjudicateSession                run the engine and pay out. Until
+//                                       dispute_deadline_height only the two
+//                                       players may send it; after that anyone
+//                                       may. Prefer this over the refund hatch
+//                                       while the hatch is still closed — a
+//                                       real verdict always beats waiting.
 //
 // A client that never offers these leaves the player watching an escrow they
 // cannot touch. The native client does it from its retreat flow
@@ -58,7 +67,13 @@ export interface DisputeContext {
   heldSecret?: boolean;
   // Somebody has submitted evidence, so the engine has a hand to replay.
   evidenceOnChain?: boolean;
+  // Chain param dispute_refund_timeout_blocks. Default matches the chain's
+  // DefaultDisputeRefundTimeoutBlocks (14400). 0 means the hatch is disabled.
+  disputeRefundTimeoutBlocks?: number;
 }
+
+// Matches types.DefaultDisputeRefundTimeoutBlocks on chain.
+export const DEFAULT_DISPUTE_REFUND_TIMEOUT_BLOCKS = 14400;
 
 // Whether the claim can be sent yet.
 export type RecoveryKind =
@@ -181,6 +196,27 @@ export function sessionRecovery(
           "scores this hand as forfeited",
       };
     }
+    const deadline = Number(session.dispute_deadline_height ?? "0");
+    const refundTimeout =
+      dispute.disputeRefundTimeoutBlocks ??
+      DEFAULT_DISPUTE_REFUND_TIMEOUT_BLOCKS;
+    // Still DISPUTED this far past the dispute deadline means adjudication
+    // never landed (out of gas, no engine, both players gone). The no-engine
+    // hatch via MsgClaimSessionTimeout is the only remaining exit — and only
+    // offered once the whole permissionless-adjudication window has elapsed,
+    // so a real verdict always had its chance first.
+    if (deadline > 0 && refundTimeout > 0) {
+      const refundAt = deadline + refundTimeout;
+      if (chainHeight >= refundAt) {
+        return {
+          kind: "ready",
+          action: "refund",
+          atHeight: refundAt,
+          reason:
+            "dispute unresolved past the adjudication window; both stakes can be refunded without the engine",
+        };
+      }
+    }
     if (dispute.evidenceOnChain) {
       return {
         kind: "ready",
@@ -192,8 +228,7 @@ export function sessionRecovery(
     // No evidence was ever submitted, so the engine has nothing to replay and
     // the chain rejects an adjudication outright. Past the dispute deadline it
     // stops rejecting and refunds each seat its own stake instead, which is
-    // the only way this escrow ever comes back.
-    const deadline = Number(session.dispute_deadline_height ?? "0");
+    // the only way this escrow ever comes back before the long hatch.
     if (deadline === 0) {
       return none(
         "under dispute, with no evidence and no deadline to force a verdict"

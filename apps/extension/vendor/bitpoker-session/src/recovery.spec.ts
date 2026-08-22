@@ -117,6 +117,41 @@ describe("sessionRecovery", () => {
     expect(sessionRecovery(s, 400, ME).reason).toMatch(/refunds both stakes/);
   });
 
+  it("offers the no-engine refund hatch once adjudication had its whole window", () => {
+    // Session 101 shape: evidence on chain, still DISPUTED long after the
+    // dispute deadline because adjudication itself could not land. Prefer a
+    // real verdict while the hatch is closed; once it opens, ClaimSessionTimeout
+    // voids the escrow without the engine.
+    const s = session({
+      status: "GAME_SESSION_STATUS_DISPUTED",
+      dispute_deadline_height: "400",
+    });
+    const beforeHatch = sessionRecovery(s, 400 + 14400 - 1, ME, {
+      evidenceOnChain: true,
+    });
+    expect(beforeHatch.action).toBe("adjudicate");
+    expect(beforeHatch.kind).toBe("ready");
+
+    const atHatch = sessionRecovery(s, 400 + 14400, ME, {
+      evidenceOnChain: true,
+    });
+    expect(atHatch.kind).toBe("ready");
+    expect(atHatch.action).toBe("refund");
+    expect(atHatch.reason).toMatch(/without the engine/);
+  });
+
+  it("keeps preferring reveal over the refund hatch", () => {
+    const s = session({
+      status: "GAME_SESSION_STATUS_DISPUTED",
+      dispute_deadline_height: "400",
+    });
+    const held = sessionRecovery(s, 99999, ME, {
+      heldSecret: true,
+      evidenceOnChain: true,
+    });
+    expect(held.action).toBe("reveal");
+  });
+
   it("offers nothing on a dispute with no evidence and no deadline", () => {
     expect(
       sessionRecovery(
