@@ -31,7 +31,7 @@ export const DEFAULT_MSG_GAS = 300000;
 // Scales with: total bytes of evidence_payload stored for the session.
 export const GAS_ADJUDICATE_SESSION_BASE = 1000000;
 export const GAS_ADJUDICATE_SESSION_PER_BYTE = 12;
-export function adjudicateSessionFloor(payloadBytes: number): number {
+export function adjudicateSessionBound(payloadBytes: number): number {
   if (!Number.isSafeInteger(payloadBytes) || payloadBytes < 0) {
     throw new Error("payload size must be a non-negative integer");
   }
@@ -85,7 +85,7 @@ export const GAS_SET_RELAY_STATUS = 200000;
 // Scales with: len(evidence_payload).
 export const GAS_SUBMIT_SESSION_EVIDENCE_BASE = 400000;
 export const GAS_SUBMIT_SESSION_EVIDENCE_PER_BYTE = 60;
-export function submitSessionEvidenceFloor(payloadBytes: number): number {
+export function submitSessionEvidenceBound(payloadBytes: number): number {
   if (!Number.isSafeInteger(payloadBytes) || payloadBytes < 0) {
     throw new Error("payload size must be a non-negative integer");
   }

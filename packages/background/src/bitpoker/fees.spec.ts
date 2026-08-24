@@ -2,9 +2,9 @@
 // webapp/packages/poker-session/src/fees.spec.ts in the BitPoker monorepo. If
 // one side changes, this fails and says so.
 import {
-  adjudicateGasFloor,
+  adjudicateGasBound,
   adjustGas,
-  evidenceGasFloor,
+  evidenceGasBound,
   feeForGas,
   parseGasPrices,
   pickGasPrice,
@@ -43,33 +43,40 @@ describe("bitpoker fee arithmetic", () => {
     expect(feeForGas(200000, { amount: "0", denom: "uchip" })).toBeUndefined();
   });
 
-  it("keeps the caller's floor over a cheap estimate", () => {
-    expect(adjustGas(100000)).toBe("140000");
-    expect(adjustGas(100000, 1.4, 400000)).toBe("400000");
-    expect(adjustGas(500000, 1.4, 400000)).toBe("700000");
+  // The direction that flipped: taking the LARGER made every message reserve —
+  // and pay for — the padded bound. Session 119 paid 10,000uchip for a
+  // 1,000,000 reservation against 81,789 gas of real work. The x4.0 still has
+  // to clear the simulate-cheap deliver-heavy path change (81,789 simulated
+  // against 291,459 for the match path in the chain's worst case).
+  it("clamps to the caller's bound instead of reserving it", () => {
+    expect(adjustGas(100000)).toBe("400000");
+    expect(Number(adjustGas(81789))).toBeGreaterThan(291459);
+    expect(adjustGas(81789, 4.0, 1000000)).toBe("327156");
+    expect(adjustGas(500000, 4.0, 1000000)).toBe("1000000");
+    expect(adjustGas(500000, 4.0, 0)).toBe("2000000");
   });
 
   it("scales the evidence fallback with its payload", () => {
-    expect(evidenceGasFloor(0)).toBe("400000");
-    expect(evidenceGasFloor(16 * 1024)).toBe("1383040");
+    expect(evidenceGasBound(0)).toBe("400000");
+    expect(evidenceGasBound(16 * 1024)).toBe("1383040");
     // The whole 1 MiB the chain accepts, priced linearly. The saturation guard
     // sits above this on purpose: clipping here would promise less gas than the
     // message really costs, which is the failure the table exists to prevent.
-    expect(evidenceGasFloor(1024 * 1024)).toBe("63314560");
-    expect(Number(evidenceGasFloor(1024 * 1024 * 1024))).toBe(MAX_MSG_GAS);
+    expect(evidenceGasBound(1024 * 1024)).toBe("63314560");
+    expect(Number(evidenceGasBound(1024 * 1024 * 1024))).toBe(MAX_MSG_GAS);
   });
 });
 
-describe("adjudicateGasFloor", () => {
+describe("adjudicateGasBound", () => {
   // Session 101: 515,703 bytes of evidence really cost 1,603,147 gas against
   // the 500,000 this extension's ancestor promised.
   it("clears what session 101 actually cost", () => {
-    expect(Number(adjudicateGasFloor(515703))).toBeGreaterThan(1603147);
+    expect(Number(adjudicateGasBound(515703))).toBeGreaterThan(1603147);
   });
 
   it("prices the largest stored transcript when the size is unknown", () => {
-    expect(adjudicateGasFloor()).toBe(
-      adjudicateGasFloor(MAX_STORED_EVIDENCE_BYTES)
+    expect(adjudicateGasBound()).toBe(
+      adjudicateGasBound(MAX_STORED_EVIDENCE_BYTES)
     );
   });
 });

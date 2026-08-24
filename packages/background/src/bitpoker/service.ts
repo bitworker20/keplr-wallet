@@ -19,9 +19,9 @@ import {
   adjustGas,
   Coin,
   DEFAULT_GAS_ADJUSTMENT,
-  adjudicateGasFloor,
-  evidenceGasFloor,
-  GAS_FLOOR_GAME_MESSAGE,
+  adjudicateGasBound,
+  evidenceGasBound,
+  GAS_BOUND_GAME_MESSAGE,
   feeForGas,
   fetchNodeGasPrice,
   GasPrice,
@@ -73,23 +73,28 @@ const ALLOWED_PAYLOAD_PREFIXES = [
   "bitpoker-session-evidence-v1\n",
 ];
 
-// Gas FLOORS for the poker messages, not fixed limits: a tx pays whichever is
-// larger, the simulated estimate or this.
+// Gas CEILINGS for the poker messages: a tx reserves the simulated estimate
+// clamped to this, and this outright when simulation is unavailable.
 //
 // Simulation measures the state the chain is in now, and these messages change
 // branch depending on state that moves underneath them. Submitting a session
 // result simulates at ~86k gas (the "record it" branch) and executes at ~111k
 // once the peer's result has landed and it runs settlement. Running out of gas
 // there leaves the session RESULT_PENDING with the escrow locked, which costs
-// far more than overpaying a fraction of a CHIP. Evidence carries the full
-// message-history payload, so it pays a per-byte write cost.
-const GAS_FLOOR_GAME = GAS_FLOOR_GAME_MESSAGE;
+// far more than overpaying a fraction of a CHIP — hence the x4.0 adjustment on
+// the estimate. Evidence carries the full message-history payload, so it pays
+// a per-byte write cost.
+//
+// What they are NOT is a floor. Taking the larger of the two made every message
+// reserve — and pay for — the chain's padded bound (gas_bounds.go's header).
+const GAS_BOUND_GAME = GAS_BOUND_GAME_MESSAGE;
 
 // Adjudication replays the disputed hand through the C++ engine inside the tx
 // and then pays out the verdict, so its cost tracks the length of the evidence
-// transcript. It is also the only way a disputed escrow is ever released, so
-// it gets evidence-sized headroom rather than a tight estimate.
-const GAS_FLOOR_ADJUDICATE = adjudicateGasFloor();
+// transcript. It is also the only way a disputed escrow is ever released, so it
+// fails closed rather than broadcasting on a guess — which is what makes this
+// bound safe to clamp with: it is only ever reached with a real simulation.
+const GAS_BOUND_ADJUDICATE = adjudicateGasBound();
 
 // A simulated tx is never verified, but the signature slot must exist and be
 // the right length or the ante handler rejects the shape before measuring.
@@ -201,7 +206,7 @@ export class BitpokerService {
       chainId,
       MSG_CANCEL_GAME_INTENT_TYPE_URL,
       encodeMsgCancelGameIntent({ creator: bech32Address, intentId }),
-      GAS_FLOOR_GAME
+      GAS_BOUND_GAME
     );
   }
 
@@ -221,7 +226,7 @@ export class BitpokerService {
       chainId,
       MSG_CLAIM_SESSION_TIMEOUT_TYPE_URL,
       encodeMsgClaimSessionTimeout({ creator: bech32Address, sessionId }),
-      GAS_FLOOR_GAME
+      GAS_BOUND_GAME
     );
   }
 
@@ -240,7 +245,7 @@ export class BitpokerService {
       chainId,
       MSG_ADJUDICATE_SESSION_TYPE_URL,
       encodeMsgAdjudicateSession({ creator: bech32Address, sessionId }),
-      GAS_FLOOR_ADJUDICATE
+      GAS_BOUND_ADJUDICATE
     );
   }
 
@@ -314,7 +319,7 @@ export class BitpokerService {
       chainId,
       MSG_OPEN_GAME_INTENT_TYPE_URL,
       msg,
-      GAS_FLOOR_GAME
+      GAS_BOUND_GAME
     );
   }
 
@@ -353,7 +358,7 @@ export class BitpokerService {
       chainId,
       MSG_SUBMIT_SESSION_RESULT_TYPE_URL,
       msg,
-      GAS_FLOOR_GAME
+      GAS_BOUND_GAME
     );
   }
 
@@ -389,7 +394,7 @@ export class BitpokerService {
       chainId,
       MSG_SUBMIT_SESSION_EVIDENCE_TYPE_URL,
       msg,
-      evidenceGasFloor(evidencePayload.length)
+      evidenceGasBound(evidencePayload.length)
     );
   }
 
@@ -416,7 +421,7 @@ export class BitpokerService {
       chainId,
       MSG_SUBMIT_SESSION_SECRET_TYPE_URL,
       msg,
-      GAS_FLOOR_GAME
+      GAS_BOUND_GAME
     );
   }
 
@@ -424,7 +429,7 @@ export class BitpokerService {
     chainId: string,
     typeUrl: string,
     msgValue: Uint8Array,
-    gasFloor: string
+    gasBound: string
   ): Promise<BitPokerTxResult> {
     const modularChainInfo =
       this.chainsService.getModularChainInfoOrThrow(chainId);
@@ -484,7 +489,7 @@ export class BitpokerService {
         cosmosInfo.rest,
         bodyBytes,
         encodeAuthInfo("0", []),
-        gasFloor,
+        gasBound,
         typeUrl === MSG_ADJUDICATE_SESSION_TYPE_URL
       ),
       this.resolveGasPrice(cosmosInfo.rest, feeDenom),
@@ -546,15 +551,15 @@ export class BitpokerService {
     throw new Error(`tx ${txHash} was not included within 30s`);
   }
 
-  // Gas from a simulated run of this exact tx, never below the caller's floor.
+  // Gas from a simulated run of this exact tx, never above the caller's bound.
   // Adjudication fails closed if simulation is unavailable: engine and
   // transcript cost cannot be bounded from MsgAdjudicateSession alone, and a
-  // blind floor recreates the out-of-gas retry loop this recovery path fixes.
+  // blind reservation recreates the out-of-gas retry loop this path fixes.
   protected async resolveGasLimit(
     rest: string,
     bodyBytes: Uint8Array,
     authInfoBytes: Uint8Array,
-    gasFloor: string,
+    gasBound: string,
     requireSimulation = false
   ): Promise<string> {
     try {
@@ -567,7 +572,7 @@ export class BitpokerService {
         rest,
         Buffer.from(txBytes).toString("base64")
       );
-      return adjustGas(used, DEFAULT_GAS_ADJUSTMENT, Number(gasFloor));
+      return adjustGas(used, DEFAULT_GAS_ADJUSTMENT, Number(gasBound));
     } catch (error) {
       if (requireSimulation) {
         const detail = error instanceof Error ? error.message : String(error);
@@ -575,7 +580,7 @@ export class BitpokerService {
           `could not simulate adjudication; refusing to broadcast with an unknown gas limit: ${detail}`
         );
       }
-      return gasFloor;
+      return gasBound;
     }
   }
 

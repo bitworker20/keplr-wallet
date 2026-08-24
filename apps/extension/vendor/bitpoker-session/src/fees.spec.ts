@@ -1,7 +1,7 @@
 import {
   adjustGas,
-  adjudicateGasFloor,
-  evidenceGasFloor,
+  adjudicateGasBound,
+  evidenceGasBound,
   feeForGas,
   parseGasPrices,
   pickGasPrice,
@@ -50,40 +50,40 @@ describe("pickGasPrice", () => {
   });
 });
 
-describe("evidenceGasFloor", () => {
+describe("evidenceGasBound", () => {
   it("scales with the evidence payload", () => {
-    expect(evidenceGasFloor(0)).toBe("400000");
-    expect(evidenceGasFloor(16 * 1024)).toBe("1383040");
+    expect(evidenceGasBound(0)).toBe("400000");
+    expect(evidenceGasBound(16 * 1024)).toBe("1383040");
     // The whole 1 MiB the chain accepts, priced linearly. The saturation guard
     // must sit ABOVE this: clipping here would hand the caller a limit smaller
     // than the real cost, which is the failure this table exists to prevent.
-    expect(evidenceGasFloor(1024 * 1024)).toBe("63314560");
+    expect(evidenceGasBound(1024 * 1024)).toBe("63314560");
   });
 
   it("saturates only on a nonsense payload size", () => {
-    expect(Number(evidenceGasFloor(1024 * 1024 * 1024))).toBe(MAX_MSG_GAS);
+    expect(Number(evidenceGasBound(1024 * 1024 * 1024))).toBe(MAX_MSG_GAS);
   });
 
   it("refuses a size that is not a byte count", () => {
-    expect(() => evidenceGasFloor(-1)).toThrow();
-    expect(() => evidenceGasFloor(1.5)).toThrow();
+    expect(() => evidenceGasBound(-1)).toThrow();
+    expect(() => evidenceGasBound(1.5)).toThrow();
   });
 });
 
-describe("adjudicateGasFloor", () => {
+describe("adjudicateGasBound", () => {
   // Session 101: 515,703 bytes of evidence really cost 1,603,147 gas, against
   // the 500,000 the clients promised and the 200,000 relayd's permissionless
   // crank promised. Both numbers have to clear it now.
   it("clears what session 101 actually cost", () => {
-    expect(Number(adjudicateGasFloor(515703))).toBeGreaterThan(1603147);
+    expect(Number(adjudicateGasBound(515703))).toBeGreaterThan(1603147);
   });
 
   it("prices the largest stored transcript when the size is unknown", () => {
-    expect(adjudicateGasFloor()).toBe(
-      adjudicateGasFloor(MAX_STORED_EVIDENCE_BYTES)
+    expect(adjudicateGasBound()).toBe(
+      adjudicateGasBound(MAX_STORED_EVIDENCE_BYTES)
     );
-    expect(Number(adjudicateGasFloor())).toBeGreaterThan(
-      Number(adjudicateGasFloor(515703))
+    expect(Number(adjudicateGasBound())).toBeGreaterThan(
+      Number(adjudicateGasBound(515703))
     );
   });
 });
@@ -122,13 +122,28 @@ describe("feeForGas", () => {
 });
 
 describe("adjustGas", () => {
-  it("applies the CLI's default adjustment and rounds up", () => {
-    expect(adjustGas(100000)).toBe("140000");
-    expect(adjustGas(100001)).toBe("140002");
+  it("applies the default adjustment and rounds up", () => {
+    expect(adjustGas(100000)).toBe("400000");
+    expect(adjustGas(100001)).toBe("400004");
   });
 
-  it("honours a floor for messages whose simulation understates them", () => {
-    expect(adjustGas(100000, 1.4, 400000)).toBe("400000");
-    expect(adjustGas(500000, 1.4, 400000)).toBe("700000");
+  // The adjustment covers a message that simulates on one code path and
+  // delivers on another: MsgOpenGameIntent simulates as "no match" (81,789 gas
+  // on session 119) and delivers as "match" (291,459 in the chain's worst
+  // case). 4.0 clears that 3.56x.
+  it("covers the simulate-cheap deliver-heavy path change", () => {
+    expect(Number(adjustGas(81789))).toBeGreaterThan(291459);
+  });
+
+  // This is the direction that flipped. Taking the LARGER made every message
+  // reserve — and pay for — the padded bound; session 119 paid 10,000uchip for
+  // a 1,000,000 reservation against 81,789 gas of real work.
+  it("clamps to the bound instead of reserving it", () => {
+    expect(adjustGas(81789, 4.0, 1000000)).toBe("327156");
+    expect(adjustGas(500000, 4.0, 1000000)).toBe("1000000");
+  });
+
+  it("leaves the estimate unclamped when no bound is given", () => {
+    expect(adjustGas(500000, 4.0, 0)).toBe("2000000");
   });
 });

@@ -7,8 +7,7 @@
 // both sides.
 //
 //   gas limit   /cosmos/tx/v1beta1/simulate runs the messages and reports
-//               gas_used; x1.4, the adjustment the Cosmos CLI's `--gas auto`
-//               applies.
+//               gas_used; x4.0, clamped to the message's published bound.
 //   gas price   /cosmos/base/node/v1beta1/config reports minimum_gas_price
 //               from the queried node's app.toml.
 //
@@ -18,14 +17,14 @@
 // what this service sent before it learned to ask.
 import { simpleFetch } from "@keplr-wallet/simple-fetch";
 import {
-  adjudicateSessionFloor,
+  adjudicateSessionBound,
   GAS_CANCEL_GAME_INTENT,
   GAS_CLAIM_SESSION_TIMEOUT,
   GAS_OPEN_GAME_INTENT,
   GAS_SUBMIT_SESSION_RESULT,
   GAS_SUBMIT_SESSION_SECRET,
   MAX_STORED_EVIDENCE_BYTES,
-  submitSessionEvidenceFloor,
+  submitSessionEvidenceBound,
 } from "./gas-bounds.generated";
 
 export interface GasPrice {
@@ -40,7 +39,18 @@ export interface Coin {
   amount: string;
 }
 
-export const DEFAULT_GAS_ADJUSTMENT = 1.4;
+// The multiplier on a simulated run, and the reason it is not the Cosmos CLI's
+// 1.4. That 1.4 only covers the small drift between simulating and signing. It
+// does not cover a message that simulates on one code path and DELIVERS on
+// another, and this chain has one: MsgOpenGameIntent simulates as "no match,
+// write an offer" and delivers as "match, escrow both stakes, draw a relay,
+// write a session".
+//
+// Sized from that jump, measured at both ends: 81,789 gas simulated on the
+// cheap path (session 119, live) against 291,459 for the match path in the
+// worst state the chain can present it (keeper/gas_bounds_test.go) — 3.56x.
+// 4.0 clears it, and the published bound clears anything it does not.
+export const DEFAULT_GAS_ADJUSTMENT = 4.0;
 
 const DEC_PLACES = 18;
 const DEC_ONE = BigInt("1" + "0".repeat(DEC_PLACES));
@@ -98,33 +108,45 @@ export function feeForGas(
   return { denom: price.denom, amount: amount.toString() };
 }
 
-// Round the measured gas up by the adjustment, never below `floor`.
+// Round the measured gas up by the adjustment, never above `bound`.
+//
+// `bound` is the chain's published bound for the message (ADR-008 §2.1) and it
+// is the CEILING, not the floor. It used to be the floor — `Math.max` — which
+// meant every message reserved the bound, and the bound is padded for a cost
+// term nothing caps yet: on session 119 an intent that used 81,789 gas
+// reserved, and PAID for, 1,000,000. The fee is the declared amount, deducted
+// in full by the ante handler, refunded never. Pass 0 to leave the estimate
+// unclamped.
 export function adjustGas(
   gasUsed: number,
   adjustment: number = DEFAULT_GAS_ADJUSTMENT,
-  floor = 0
+  bound = 0
 ): string {
-  return String(Math.max(Math.ceil(gasUsed * adjustment), Math.ceil(floor)));
+  const adjusted = Math.ceil(gasUsed * adjustment);
+  if (bound <= 0) {
+    return String(adjusted);
+  }
+  return String(Math.min(adjusted, Math.ceil(bound)));
 }
 
 // A dispute evidence tx carries the full protobuf transcript. Keep this in
-// sync with webapp/packages/poker-session/src/fees.ts and the C++ gas floors.
-export function evidenceGasFloor(payloadBytes: number): string {
-  return String(submitSessionEvidenceFloor(payloadBytes));
+// sync with webapp/packages/poker-session/src/fees.ts and the C++ gas bounds.
+export function evidenceGasBound(payloadBytes: number): string {
+  return String(submitSessionEvidenceBound(payloadBytes));
 }
 
 // What to reserve for an adjudication whose transcript size is unknown: the
 // largest one the chain will store. Guessing low does not slow the transaction
 // down — it fails it after CheckTx already reported success, and the escrow
 // stays locked (ADR-008 §2.1).
-export function adjudicateGasFloor(evidencePayloadBytes?: number): string {
+export function adjudicateGasBound(evidencePayloadBytes?: number): string {
   return String(
-    adjudicateSessionFloor(evidencePayloadBytes ?? MAX_STORED_EVIDENCE_BYTES)
+    adjudicateSessionBound(evidencePayloadBytes ?? MAX_STORED_EVIDENCE_BYTES)
   );
 }
 
-// The floor for game messages whose cost does not scale with any client input.
-export const GAS_FLOOR_GAME_MESSAGE = String(
+// The ceiling for game messages whose cost does not scale with any client input.
+export const GAS_BOUND_GAME_MESSAGE = String(
   Math.max(
     GAS_OPEN_GAME_INTENT,
     GAS_CANCEL_GAME_INTENT,
