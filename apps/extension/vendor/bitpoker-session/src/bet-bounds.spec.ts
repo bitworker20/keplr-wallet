@@ -119,6 +119,7 @@ describe("computeBetBounds (bet_bounds.hpp port)", () => {
     const v = zjhView({
       currentDarkBet: 5,
       myStack: 101,
+      oppStack: 200, // opponent covers me: my own stack is the binding cap
       hasLooked: true,
     });
     const b = computeBetBounds(v);
@@ -132,12 +133,54 @@ describe("computeBetBounds (bet_bounds.hpp port)", () => {
   });
 
   it("ZJH blind pays face value", () => {
-    const v = zjhView({ currentDarkBet: 2, myStack: 40 });
+    const v = zjhView({ currentDarkBet: 2, myStack: 40, oppStack: 40 });
     const b = computeBetBounds(v);
     expect(b.zjhCostMultiplier).toBe(1);
     expect(b.minTarget).toBe(2);
     expect(b.maxTarget).toBe(40);
     expect(betActionCost(v, 7)).toBe(7);
+  });
+
+  // ZJH stacks are chips owned, but every seat's commitment is capped at the
+  // effective stake, so the deeper seat can only bet down to the shorter one.
+  it("ZJH deep stack is capped by the shorter stack", () => {
+    const v = zjhView({
+      currentDarkBet: 2,
+      myCommitted: 1,
+      myStack: 100, // my total 101
+      oppCommitted: 1,
+      oppStack: 40, // opponent total 41 -> effective stake 41
+    });
+    const b = computeBetBounds(v);
+    expect(b.hasBet).toBe(true);
+    expect(b.maxTarget).toBe(40); // 41 effective - 1 already committed
+    expect(b.maxIsTrueAllIn).toBe(false); // 60 chips stay behind
+    expect(betActionCost(v, 100)).toBe(40);
+  });
+
+  it("ZJH short stack top level is a true all-in", () => {
+    const v = zjhView({
+      currentDarkBet: 2,
+      myCommitted: 1,
+      myStack: 40,
+      oppCommitted: 1,
+      oppStack: 100,
+    });
+    const b = computeBetBounds(v);
+    expect(b.maxTarget).toBe(40);
+    expect(b.maxIsTrueAllIn).toBe(true);
+  });
+
+  it("ZJH offers no bet once the short stack is covered", () => {
+    const v = zjhView({
+      currentDarkBet: 2,
+      myCommitted: 40,
+      myStack: 60,
+      oppCommitted: 40,
+      oppStack: 0,
+    });
+    expect(computeBetBounds(v).hasBet).toBe(false);
+    expect(betActionCost(v, 5)).toBe(0);
   });
 
   it("TH raise cost is the delta above committed", () => {

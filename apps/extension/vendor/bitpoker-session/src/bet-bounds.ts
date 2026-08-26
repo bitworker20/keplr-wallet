@@ -7,7 +7,8 @@
 //   - TH with currentBet == 0: amount is CHIPS TO ADD this action (a Bet).
 //   - TH with currentBet  > 0: amount is the RAISE-TO street total (RaiseTo).
 //   - ZJH: amount is the DARK-BET LEVEL; the chips actually paid are
-//     level x multiplier (x2 once the actor has looked), capped by the stack.
+//     level x multiplier (x2 once the actor has looked), capped by what the
+//     seat may still commit (see zhajinhuaCommittable).
 
 export interface BetView {
   game: "TH" | "ZJH";
@@ -40,13 +41,25 @@ export interface BetBounds {
 const clampInto = (x: number, min: number, max: number): number =>
   Math.min(Math.max(x, min), max);
 
+// ZJH: chips this seat may still put in THIS hand. Both seats are capped at the
+// effective stake (the shorter of the two starting stacks — the engine
+// truncates the payment there), so a deep stack's remaining chips are not all
+// bettable: myStack is what I own, this is what I may wager.
+export function zhajinhuaCommittable(v: BetView): number {
+  const effective = Math.min(
+    v.myCommitted + v.myStack,
+    v.oppCommitted + v.oppStack
+  );
+  return Math.max(0, effective - v.myCommitted);
+}
+
 // Chips this action actually moves for a chosen amount ("raise to 220 · pays
 // 180"): TH raise-to pays target - myCommitted; a TH bet pays the amount
-// itself; ZJH pays level x multiplier capped by the stack.
+// itself; ZJH pays level x multiplier, capped by what the seat may still commit.
 export function betActionCost(v: BetView, amount: number): number {
   if (v.game === "ZJH") {
     const mult = v.hasLooked ? 2 : 1;
-    return Math.min(amount * mult, v.myStack);
+    return Math.min(amount * mult, zhajinhuaCommittable(v));
   }
   if (v.currentBet > 0) {
     return amount > v.myCommitted ? amount - v.myCommitted : 0;
@@ -67,18 +80,21 @@ export function computeBetBounds(v: BetView): BetBounds {
 
   if (v.game === "ZJH") {
     b.zjhCostMultiplier = v.hasLooked ? 2 : 1;
-    if (v.myStack === 0) {
-      return b; // fully committed: no bet entry
+    const committable = zhajinhuaCommittable(v);
+    if (committable === 0) {
+      return b; // fully committed (or covering the short stack): no bet entry
     }
     b.hasBet = true;
     b.minTarget = Math.max(1, v.currentDarkBet);
-    // Top level = the smallest dark level whose actual cost consumes the
-    // whole remaining stack (the engine caps the payment there).
+    // Top level = the smallest dark level whose actual cost consumes
+    // everything still committable (the engine caps the payment there).
     b.maxTarget = Math.max(
       b.minTarget,
-      Math.ceil(v.myStack / b.zjhCostMultiplier)
+      Math.ceil(committable / b.zjhCostMultiplier)
     );
-    b.maxIsTrueAllIn = true;
+    // Same distinction as TH: only the seat whose own chips run out first is
+    // truly all-in; the deep seat merely covers the short one.
+    b.maxIsTrueAllIn = committable >= v.myStack;
     return b;
   }
 
