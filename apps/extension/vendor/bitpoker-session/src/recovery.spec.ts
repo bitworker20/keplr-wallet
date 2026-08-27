@@ -88,6 +88,38 @@ describe("sessionRecovery", () => {
     expect(sessionRecovery(s, 99999, ME).reason).toMatch(/submit your result/);
   });
 
+  it("files the kept transcript before anything else in a dispute", () => {
+    // Session 40 from the winning seat: the loser forced the dispute, nothing
+    // is on chain, and the engine decides an empty dispute by refunding. The
+    // transcript this browser kept is the whole of the defence, so it goes
+    // first — ahead of the reveal, ahead of the verdict.
+    const s = session({ status: "GAME_SESSION_STATUS_DISPUTED" });
+    const holding = sessionRecovery(s, 5, ME, {
+      keptTranscript: true,
+      heldSecret: true,
+    });
+    expect(holding.kind).toBe("ready");
+    expect(holding.action).toBe("prove");
+
+    // Once ours is on chain the order resumes: reveal, then verdict.
+    const filed = sessionRecovery(s, 5, ME, {
+      keptTranscript: true,
+      myEvidenceOnChain: true,
+      evidenceOnChain: true,
+      heldSecret: true,
+    });
+    expect(filed.action).toBe("reveal");
+  });
+
+  it("does not offer to prove a hand this browser cannot prove", () => {
+    // No transcript kept (a different device, cleared storage): the seat still
+    // reveals and asks for a verdict. It may lose that verdict, but nothing is
+    // gained by stalling.
+    const s = session({ status: "GAME_SESSION_STATUS_DISPUTED" });
+    const recovery = sessionRecovery(s, 5, ME, { evidenceOnChain: true });
+    expect(recovery.action).toBe("adjudicate");
+  });
+
   it("makes a disputed seat reveal its cards before asking for a verdict", () => {
     // Adjudication scores an undisclosed secret as a forfeit, so a client that
     // offered the verdict first would throw away a hand its player had won.

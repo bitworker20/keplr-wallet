@@ -25,6 +25,7 @@ import {
   forgetSessionIdentity,
   rememberSessionIdentity,
 } from "./session-vault";
+import { forgetTranscript, rememberTranscript } from "./transcript-vault";
 import { PokerWorkerClient } from "./worker-client";
 import {
   HandEffect,
@@ -985,6 +986,12 @@ export class PokerGameController {
         )}…), waiting for on-chain settlement…`,
       });
 
+      // The result is the chain's problem now, and if the opponent contradicts
+      // it the chain believes whoever produces the transcript. Ours lives in
+      // the worker's heap, which dies with this tab — so write it down before
+      // that happens (transcript-vault.ts, session 40).
+      await this.keepTranscriptForDefence();
+
       const lcdUrl = this.chainLcdUrl;
       for (let attempt = 0; attempt < 60; attempt++) {
         const res = await fetch(
@@ -993,8 +1000,10 @@ export class PokerGameController {
         const sessionStatus: string = res.session?.status ?? "";
         this.emit({ chain: { ...this.snapshot.chain, sessionStatus } });
         if (/SETTLED/.test(sessionStatus)) {
-          // Nothing left to dispute, so the stored identity is spent.
+          // Nothing left to dispute, so the stored identity is spent and the
+          // transcript has nothing left to prove.
           forgetSessionIdentity(this.myIntentId);
+          forgetTranscript(String(session.session_id));
           this.emit({
             stage: "done",
             table,
@@ -1013,6 +1022,62 @@ export class PokerGameController {
         stage: "error",
         table,
         message: e?.message ?? String(e),
+      });
+    }
+  }
+
+  // Keep this hand's transcript against a dispute that has not happened yet.
+  //
+  // Same bytes and same signature the mid-hand dispute path would have
+  // submitted (submitDispute below) — the difference is only that nothing is
+  // wrong yet, so they go into localStorage instead of onto the chain. Failure
+  // is reported and swallowed: the hand is over, the result is filed, and what
+  // is lost is the ability to defend it later, which is worth a line in the
+  // event stream and not an error state on a settled hand.
+  protected async keepTranscriptForDefence(): Promise<void> {
+    const session = this.chainSession;
+    if (!session) {
+      return;
+    }
+    try {
+      const evidence = await this.worker.buildDisputeEvidence({
+        chainSessionId: String(session.session_id),
+        submitter: this.chainAddress,
+        // ARBITRATION_REASON_CODE_UNSPECIFIED: nothing went wrong. This is the
+        // transcript of a hand that finished, kept in case it is contradicted.
+        reasonCode: 0,
+        reasonLabel: "settled-result-defence",
+        reasonDescription:
+          "transcript of the hand this player filed a result for, kept so the " +
+          "result can be proved if the opponent disputes it",
+      });
+      if (evidence.error || !evidence.payloadHex || !evidence.evidenceHash) {
+        throw new Error(evidence.error ?? "empty evidence payload");
+      }
+      const signed = await this.wallet.signPayload(
+        this.chainId,
+        evidence.signingPayload ?? ""
+      );
+      const kept = rememberTranscript({
+        sessionId: String(session.session_id),
+        submitter: this.chainAddress,
+        payloadHex: evidence.payloadHex,
+        evidenceHash: evidence.evidenceHash,
+        signature: signed.signature,
+        reason: evidence.reason ?? "settled-result-defence",
+      });
+      if (!kept) {
+        this.emit({
+          message:
+            "this browser could not store the hand transcript, so a dispute " +
+            "over this result would be decided without it",
+        });
+      }
+    } catch (e: any) {
+      this.emit({
+        message: `transcript not kept (${
+          e?.message ?? String(e)
+        }) — a dispute over this result would be decided without it`,
       });
     }
   }

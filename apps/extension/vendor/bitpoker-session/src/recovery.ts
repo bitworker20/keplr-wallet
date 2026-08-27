@@ -21,8 +21,18 @@
 //                                       itself cannot run (node without cgo,
 //                                       out-of-gas on a huge transcript).
 //
-// A DISPUTED session otherwise needs the other two, in order:
+// A DISPUTED session otherwise needs the other three, in order:
 //
+//   MsgSubmitSessionEvidence            put this hand's transcript on chain.
+//                                       A dispute is decided by whichever
+//                                       transcript reaches the engine, and with
+//                                       none on chain the engine decides
+//                                       nothing — past the deadline that is a
+//                                       refund, which is precisely what the
+//                                       loser of a finished hand is angling for
+//                                       (session 40). transcript-vault.ts is
+//                                       what still has it after the tab that
+//                                       played the hand is gone.
 //   MsgSubmitSessionSecret              disclose this seat's per-hand key, so
 //                                       the engine scores the cards this
 //                                       player actually held instead of
@@ -40,6 +50,7 @@
 // same idea: say what is recoverable, and let the player press the button.
 
 import { sessionIdentityForIntent } from "./session-vault";
+import { transcriptForSession } from "./transcript-vault";
 
 export interface ChainGameSession {
   session_id: string;
@@ -69,6 +80,11 @@ export interface DisputeContext {
   heldSecret?: boolean;
   // Somebody has submitted evidence, so the engine has a hand to replay.
   evidenceOnChain?: boolean;
+  // This browser still holds the transcript of the hand (transcript-vault.ts)
+  // and has not put it on chain yet. Proof this seat has and the chain does not
+  // is the difference between a verdict and a refund.
+  keptTranscript?: boolean;
+  myEvidenceOnChain?: boolean;
   // A MsgAdjudicateSession for this session has already been refused by the
   // chain. Set it after an attempt comes back with a non-zero code — a
   // validator built without the cgo engine rejects every one of them, and no
@@ -89,7 +105,12 @@ export type RecoveryKind =
 // What sending it will do. Kept separate from `kind` so a session that is
 // still counting down can still be labelled honestly — a RESULT_PENDING
 // session says "send to adjudication" while it waits, not "refund".
-export type RecoveryAction = "refund" | "escalate" | "reveal" | "adjudicate";
+export type RecoveryAction =
+  | "refund"
+  | "escalate"
+  | "prove"
+  | "reveal"
+  | "adjudicate";
 
 export interface SessionRecovery {
   kind: RecoveryKind;
@@ -213,6 +234,20 @@ export function sessionRecovery(
           "the chain will not produce a verdict for this dispute; both stakes can be refunded without the engine",
       };
     }
+    // Proof before anything else. The engine decides this hand from the
+    // transcripts on chain; holding the only copy of ours while asking for a
+    // verdict asks the chain to decide on the opponent's version of it — or,
+    // with nothing on chain at all, to refund a hand we may have won.
+    if (dispute.keptTranscript && !dispute.myEvidenceOnChain) {
+      return {
+        kind: "ready",
+        action: "prove",
+        atHeight: 0,
+        reason:
+          "under dispute — file this hand's transcript, or the chain decides " +
+          "it without your side of the story",
+      };
+    }
     // Reveal before verdict: an undisclosed secret is scored as a forfeit, so
     // asking for a verdict while still holding one throws the hand away.
     if (dispute.heldSecret) {
@@ -280,12 +315,14 @@ export function myIntentId(
   return undefined;
 }
 
-// Whether anyone has put evidence on chain for this session — i.e. whether the
-// adjudication engine has a hand to replay at all.
-export async function fetchHasEvidence(
+// Who has put evidence on chain for this session. Two different questions are
+// asked of this list: whether the engine has any hand to replay at all, and
+// whether OUR transcript is among them — the chain keeps one canonical payload
+// per player and refuses a second, so filing twice is a wasted fee.
+export async function fetchEvidenceSubmitters(
   lcdUrl: string,
   sessionId: string
-): Promise<boolean> {
+): Promise<string[]> {
   try {
     const res = await fetch(
       `${lcdUrl.replace(
@@ -294,13 +331,27 @@ export async function fetchHasEvidence(
       )}/pokerchain/pokerchain/v1/sessions/${sessionId}/evidence`
     );
     if (!res.ok) {
-      return false;
+      return [];
     }
     const evidence = (await res.json())?.evidence;
-    return Array.isArray(evidence) && evidence.length > 0;
+    if (!Array.isArray(evidence)) {
+      return [];
+    }
+    return evidence
+      .map((item: { submitter?: string }) => item?.submitter ?? "")
+      .filter((submitter: string) => submitter.length > 0);
   } catch {
-    return false;
+    return [];
   }
+}
+
+// Whether anyone has put evidence on chain for this session — i.e. whether the
+// adjudication engine has a hand to replay at all.
+export async function fetchHasEvidence(
+  lcdUrl: string,
+  sessionId: string
+): Promise<boolean> {
+  return (await fetchEvidenceSubmitters(lcdUrl, sessionId)).length > 0;
 }
 
 // This account's sessions that have not finished, with what can be done about
@@ -338,14 +389,20 @@ export async function fetchRecoverableSessions(
       // Only a disputed session needs the extra two questions, and they cost a
       // request each.
       const intentId = myIntentId(session, address);
-      const dispute: DisputeContext =
-        session.status === DISPUTED
-          ? {
-              heldSecret: !!(intentId && sessionIdentityForIntent(intentId)),
-              evidenceOnChain: await fetchHasEvidence(base, session.session_id),
-              adjudicationRefused: adjudicationRefused.has(session.session_id),
-            }
-          : {};
+      let dispute: DisputeContext = {};
+      if (session.status === DISPUTED) {
+        const submitters = await fetchEvidenceSubmitters(
+          base,
+          session.session_id
+        );
+        dispute = {
+          heldSecret: !!(intentId && sessionIdentityForIntent(intentId)),
+          evidenceOnChain: submitters.length > 0,
+          keptTranscript: !!transcriptForSession(session.session_id, address),
+          myEvidenceOnChain: submitters.includes(address),
+          adjudicationRefused: adjudicationRefused.has(session.session_id),
+        };
+      }
       const recovery = sessionRecovery(session, chainHeight, address, dispute);
       if (recovery.kind !== "none") {
         out.push({ session, recovery, intentId });

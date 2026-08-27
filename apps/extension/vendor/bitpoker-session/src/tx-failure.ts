@@ -20,6 +20,25 @@ const SDK_TX_IN_MEMPOOL_CACHE = 19;
 const SDK_MEMPOOL_IS_FULL = 20;
 const SDK_WRONG_SEQUENCE = 32;
 
+// The pokerchain module's codespace, and the module codes a client acts on
+// rather than merely reporting. Mirrors x/pokerchain/types/errors.go and the
+// native client's chain_tx_outcome.hpp.
+export const POKERCHAIN_CODESPACE = "pokerchain";
+
+// Adjudication has no transcript on chain to decide this hand from — yet. It
+// reads as terminal (it is a module error) but the remedy is local and the
+// opposite of stopping: file the transcript this client kept, then ask again.
+export const CODE_ADJUDICATION_NO_EVIDENCE = 1109;
+
+export function isAdjudicationNoEvidence(
+  code: number,
+  codespace?: string
+): boolean {
+  return (
+    code === CODE_ADJUDICATION_NO_EVIDENCE && codespace === POKERCHAIN_CODESPACE
+  );
+}
+
 export type TxFailureClass =
   // Nothing about the message is wrong: the chain was busy, or our own previous
   // transaction had not landed yet. Send it again unchanged.
