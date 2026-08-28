@@ -1,6 +1,6 @@
 # Which gamecore sources the committed gamecore.wasm was built from.
 # Written by tools/wasm-stamp.sh --write; verified by --check (make wasm-check).
-# artifact gamecore.wasm 0321204230abe66b4e614def5e094056e3e2e6b6b47959494fcee11e00d2a427
+# artifact gamecore.wasm efc1ae209b2879f99b26386f1b82b92219920044b512c117657985289127eaf8
 0e28b87efdae618a66517f8655c49168c9c98725face9b1256cf46e53f2f65f0  bitpoker/include/common/game_message.hpp
 4343e2f0e927df4fec10d4ab0448e6ae3c19ddfd56750f6e523c23d56bae9198  bitpoker/include/common/game_message_types.hpp
 dc15fdc48724568c57f0d1eaed05c984ca68e702f5c57a3626ca4ac0b68c17eb  bitpoker/include/common/protocol_state.hpp
@@ -8,7 +8,7 @@ da08f55bf13fdce8bbcc5845592bc41d4c68cf140a6f4157ed6014047eb04a55  bitpoker/inclu
 fa8c71298d31bf32196e7e2395fbcbb2594d26d7ef148fc9f4c188d850b5658a  bitpoker/include/common/session_matchmaking.hpp
 d2d41e0a9322a6cffea3e4ea0e74aa4de9c3be74b97b95e092d4fc5b0750b972  bitpoker/include/common/session_settlement.hpp
 5ce95dc13b851003bb42fffcc1cccffb8537e36fbadf7f8f562021f9d4ed728a  bitpoker/include/core/BarnettSmart.hpp
-89b208fd301408b1485bd73f51814c53494d6ac65a377f0b18aa81e980ffa8ad  bitpoker/include/core/bitpoker.hpp
+aa1db48b18079e40ba79e8dbdd6205de6c013c4d345d6cf13069cd9bb8ed356e  bitpoker/include/core/bitpoker.hpp
 20c890134d0f51bf357af1d486c2abf934491b61e7c939688fb4104f53cca8f0  bitpoker/include/core/bitpoker_rand.h
 f4883bb3c80fc6ed696dab9c8f09319c7e2603a3b3225eafe1934ad83af24674  bitpoker/include/core/bitpoker_schnorrq.h
 aa17df002f417fda2eaf7279fe1328480c35ed18d44a1c9d90731437a06a3348  bitpoker/include/core/bitpoker_schnorrq.hpp
