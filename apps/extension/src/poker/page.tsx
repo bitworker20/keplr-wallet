@@ -43,6 +43,7 @@ import { ThTable } from "./ui/th-table";
 import { ZjhTable } from "./ui/zjh-table";
 import { Diagnostics } from "./ui/diagnostics";
 import { Lobby } from "./ui/lobby";
+import { Recovery } from "./ui/recovery";
 import { CreateGameForm, CreateGameSubmit } from "./ui/create-game-form";
 
 export interface PokerPageProps {
@@ -233,6 +234,17 @@ export const PokerPage: React.FC<PokerPageProps> = ({ wallet, chainId }) => {
             endpoints, so it lives here rather than in the dev block below
             that both on-chain paths used to borrow it from. */}
         {field("playerName", "name")}
+        {/* Above the lobby on purpose: money already escrowed outranks a new
+            game, and one of these steps is time-limited — a disputed session
+            has to have its transcript filed before the dispute deadline or the
+            chain refunds a hand this player may have won. */}
+        <Recovery
+          wallet={wallet}
+          chainId={chainId}
+          lcdUrl={form.lcdUrl}
+          myAddress={account.address}
+          enabled={!formLocked && !!account.address}
+        />
         <div style={{ margin: "0.5rem 0" }}>
           <b>Open games</b>
           <Lobby

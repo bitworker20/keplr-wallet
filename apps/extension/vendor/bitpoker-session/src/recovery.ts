@@ -398,7 +398,10 @@ export async function fetchRecoverableSessions(
         dispute = {
           heldSecret: !!(intentId && sessionIdentityForIntent(intentId)),
           evidenceOnChain: submitters.length > 0,
-          keptTranscript: !!transcriptForSession(session.session_id, address),
+          keptTranscript: !!(await transcriptForSession(
+            session.session_id,
+            address
+          )),
           myEvidenceOnChain: submitters.includes(address),
           adjudicationRefused: adjudicationRefused.has(session.session_id),
         };

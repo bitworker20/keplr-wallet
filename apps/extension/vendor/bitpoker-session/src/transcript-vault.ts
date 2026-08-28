@@ -12,27 +12,41 @@
 // hand it had lost. B's transcript would have settled it — and in a browser
 // that transcript lives in the gamecore worker's heap, which dies with the tab.
 //
-// So it is written down at the moment the result is filed, signed while the
-// wallet is still there to sign it, and kept until the session is terminal.
-// This is the browser's half of client/transcript_vault.hpp; the drawer beside
+// So it is written down before the result is filed, signed while the wallet is
+// still there to sign it, and kept until the session is terminal. This is the
+// browser's half of client/transcript_vault.hpp; the drawer beside
 // session-vault.ts, holding proof rather than a key.
+//
+// **IndexedDB, not localStorage.** The chain accepts an evidence payload up to
+// 1 MiB, and real hands have come close: session 101's transcript was ~515 KB,
+// which is over a million characters once hex-encoded and more than two
+// megabytes once localStorage stores it as UTF-16. A localStorage vault has to
+// cap itself well under what the chain accepts, and that cap is not a
+// theoretical edge — it is a long hand, which is also exactly the hand an
+// opponent can engineer before disputing it. IndexedDB stores the bytes as
+// bytes, under a quota measured against free disk rather than a few megabytes
+// per origin, so the vault can cover the chain's real limit.
 //
 // What is stored is not secret. It is the same bytes this client would have
 // published on chain during a mid-hand dispute, and every message inside is
 // already signed by whoever sent it.
 
-const STORAGE_KEY = "bitpoker.session-transcript.v1";
+const DB_NAME = "bitpoker.transcripts";
+const DB_VERSION = 1;
+const STORE = "transcripts";
 
 // Records outlive their session by a wide margin — a dispute window is hours —
 // but must not accumulate forever on a shared browser.
 const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
-// localStorage is a few megabytes for the whole origin, and one transcript is
-// tens of kilobytes of hex in the normal case. Both caps exist so a pathological
-// hand cannot evict the wallet's own state: a payload past the per-record cap is
-// not stored at all (and says so), and only the newest few records are kept.
-const MAX_PAYLOAD_HEX_CHARS = 1_000_000; // ~500 KB of payload
-const MAX_RECORDS = 3;
+// The chain's own ceiling (MaxEvidencePayloadBytes). A payload the chain would
+// refuse is not worth keeping, and anything at or under it must be keepable —
+// that is the whole point of not using localStorage.
+export const MAX_PAYLOAD_BYTES = 1024 * 1024;
+
+// How many sessions' transcripts to keep. Small because a session that has not
+// settled within a week is past every deadline the chain has.
+const MAX_RECORDS = 8;
 
 export interface KeptTranscript {
   sessionId: string;
@@ -50,81 +64,117 @@ export interface KeptTranscript {
   savedAt: number;
 }
 
-type Vault = Record<string, KeptTranscript>;
+// The stored shape: the payload as bytes rather than hex, which is half the
+// size and what IndexedDB is good at. Hex is the interchange format at the
+// edges (the chain message wants it), not the storage format.
+interface StoredTranscript extends Omit<KeptTranscript, "payloadHex"> {
+  payload: Uint8Array;
+}
 
-// Storage may be absent (SSR, a worker) or refuse to work (private mode, a page
-// with storage disabled). None of that is worth an exception in the middle of
-// settling a hand: the player loses the ability to defend this result later,
-// not the ability to finish playing.
-function storage(): Storage | undefined {
-  try {
-    return typeof localStorage === "undefined" ? undefined : localStorage;
-  } catch {
+function hexToBytes(hex: string): Uint8Array | undefined {
+  if (hex.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(hex)) {
     return undefined;
   }
-}
-
-function read(): Vault {
-  const store = storage();
-  if (!store) {
-    return {};
-  }
-  try {
-    const raw = store.getItem(STORAGE_KEY);
-    const parsed = raw ? JSON.parse(raw) : {};
-    return parsed && typeof parsed === "object" ? (parsed as Vault) : {};
-  } catch {
-    return {};
-  }
-}
-
-function write(vault: Vault): boolean {
-  const store = storage();
-  if (!store) {
-    return false;
-  }
-  try {
-    store.setItem(STORAGE_KEY, JSON.stringify(vault));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-// Newest first, dropped by age and then by count. `protect` is never dropped:
-// two transcripts written in the same millisecond tie on savedAt, and the one
-// that must survive that tie is the one being written now — it belongs to the
-// session that is still live, while the others have probably settled.
-function pruned(vault: Vault, protect?: string): Vault {
-  const cutoff = Date.now() - MAX_AGE_MS;
-  const out: Vault = {};
-  let room = MAX_RECORDS;
-  if (protect && vault[protect]) {
-    out[protect] = vault[protect];
-    room -= 1;
-  }
-  const rest = Object.values(vault)
-    .filter(
-      (record) =>
-        record &&
-        record.sessionId &&
-        record.sessionId !== protect &&
-        record.savedAt >= cutoff
-    )
-    .sort((a, b) => b.savedAt - a.savedAt)
-    .slice(0, Math.max(room, 0));
-  for (const record of rest) {
-    out[record.sessionId] = record;
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = parseInt(hex.substr(i * 2, 2), 16);
   }
   return out;
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+  let out = "";
+  for (const byte of bytes) {
+    out += byte.toString(16).padStart(2, "0");
+  }
+  return out;
+}
+
+// IndexedDB may be absent (SSR, some workers) or refuse to open (private mode,
+// storage disabled, a browser that blocks it for this origin). None of that is
+// worth an exception in the middle of settling a hand: the player loses the
+// ability to defend this result later, not the ability to finish playing. Every
+// entry point below resolves rather than rejects.
+// Opened per operation rather than cached. A cached handle is the faster
+// shape and the wrong one here: it goes stale when another tab triggers a
+// version change or the browser closes the connection, and every later write
+// then fails silently for the life of the page — on the one path whose entire
+// job is to still work later. The vault is touched a handful of times per hand
+// and once per recovery poll, so an open is not a cost worth that.
+function openDb(): Promise<IDBDatabase | undefined> {
+  return new Promise((resolve) => {
+    let factory: IDBFactory | undefined;
+    try {
+      factory = typeof indexedDB === "undefined" ? undefined : indexedDB;
+    } catch {
+      factory = undefined;
+    }
+    if (!factory) {
+      resolve(undefined);
+      return;
+    }
+    let request: IDBOpenDBRequest;
+    try {
+      request = factory.open(DB_NAME, DB_VERSION);
+    } catch {
+      resolve(undefined);
+      return;
+    }
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(STORE)) {
+        db.createObjectStore(STORE, { keyPath: "sessionId" });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => resolve(undefined);
+    request.onblocked = () => resolve(undefined);
+  });
+}
+
+function runTransaction<T>(
+  mode: IDBTransactionMode,
+  body: (store: IDBObjectStore) => IDBRequest<T> | undefined
+): Promise<T | undefined> {
+  return openDb().then(
+    (db) =>
+      new Promise<T | undefined>((resolve) => {
+        if (!db) {
+          resolve(undefined);
+          return;
+        }
+        let request: IDBRequest<T> | undefined;
+        try {
+          const tx = db.transaction(STORE, mode);
+          request = body(tx.objectStore(STORE));
+          tx.onabort = () => resolve(undefined);
+          tx.onerror = () => resolve(undefined);
+        } catch {
+          resolve(undefined);
+          return;
+        }
+        if (!request) {
+          resolve(undefined);
+          return;
+        }
+        // Bound to a local: the closures below outlive the narrowing above.
+        const pending = request;
+        pending.onsuccess = () => resolve(pending.result);
+        pending.onerror = () => resolve(undefined);
+      })
+  );
+}
+
+function isFresh(record: StoredTranscript): boolean {
+  return record.savedAt >= Date.now() - MAX_AGE_MS;
 }
 
 // Store the transcript for a session. Returns false when it could not be kept —
 // worth surfacing, because it is exactly the difference between defending a
 // disputed result and watching it refunded.
-export function rememberTranscript(
+export async function rememberTranscript(
   transcript: Omit<KeptTranscript, "savedAt">
-): boolean {
+): Promise<boolean> {
   if (
     !transcript.sessionId ||
     !transcript.payloadHex ||
@@ -132,49 +182,87 @@ export function rememberTranscript(
   ) {
     return false;
   }
-  if (transcript.payloadHex.length > MAX_PAYLOAD_HEX_CHARS) {
+  const payload = hexToBytes(transcript.payloadHex);
+  if (!payload) {
     return false;
   }
-  const record: KeptTranscript = { ...transcript, savedAt: Date.now() };
-  const vault = read();
-  vault[record.sessionId] = record;
-  if (write(pruned(vault, record.sessionId))) {
-    return true;
+  if (payload.byteLength > MAX_PAYLOAD_BYTES) {
+    // The chain would refuse this payload too, so there is nothing to keep it
+    // for. Reporting false lets the caller say so instead of implying cover.
+    return false;
   }
-  // Out of quota: give up everything older and try once with this record alone.
-  // A transcript for the session that is live now is worth more than three for
-  // sessions that have probably settled.
-  return write({ [record.sessionId]: record });
+  const record: StoredTranscript = {
+    sessionId: transcript.sessionId,
+    submitter: transcript.submitter,
+    payload,
+    evidenceHash: transcript.evidenceHash,
+    signature: transcript.signature,
+    reason: transcript.reason,
+    savedAt: Date.now(),
+  };
+  const stored = await runTransaction("readwrite", (store) =>
+    store.put(record)
+  );
+  if (stored === undefined) {
+    return false;
+  }
+  // Pruning is best-effort housekeeping and never decides the return value: a
+  // transcript that was stored is stored whether or not the tidy-up worked.
+  await pruneTranscripts(record.sessionId);
+  return true;
 }
 
 // The transcript this account can use to defend a session, if there is one. The
 // submitter check is what keeps a shared browser from offering one seat's proof
 // under the other seat's address, which the chain would refuse anyway.
-export function transcriptForSession(
+export async function transcriptForSession(
   sessionId: string,
   submitter?: string
-): KeptTranscript | undefined {
-  const record = read()[sessionId];
-  if (!record) {
+): Promise<KeptTranscript | undefined> {
+  const record = await runTransaction<StoredTranscript>("readonly", (store) =>
+    store.get(sessionId)
+  );
+  if (!record || !record.payload || !isFresh(record)) {
     return undefined;
   }
   if (submitter && record.submitter && record.submitter !== submitter) {
     return undefined;
   }
-  return record;
+  const { payload, ...rest } = record;
+  return { ...rest, payloadHex: bytesToHex(payload) };
 }
 
 // Called once the session can no longer be disputed (SETTLED/CANCELLED), or
 // once this transcript is on chain and does not need keeping twice.
-export function forgetTranscript(sessionId: string): void {
-  const vault = read();
-  if (!(sessionId in vault)) {
-    return;
-  }
-  delete vault[sessionId];
-  write(pruned(vault));
+export async function forgetTranscript(sessionId: string): Promise<void> {
+  await runTransaction("readwrite", (store) => store.delete(sessionId));
 }
 
-export function pruneTranscripts(): void {
-  write(pruned(read()));
+// Drop stale records, and trim to the newest MAX_RECORDS. `protect` is never
+// dropped: two transcripts written in the same millisecond tie on savedAt, and
+// the one that must survive that tie is the one being written now — it belongs
+// to the session that is still live, while the others have probably settled.
+export async function pruneTranscripts(protect?: string): Promise<void> {
+  const all = await runTransaction<StoredTranscript[]>("readonly", (store) =>
+    store.getAll()
+  );
+  if (!all || all.length === 0) {
+    return;
+  }
+  const doomed = new Set(
+    all.filter((record) => !isFresh(record)).map((r) => r.sessionId)
+  );
+  const survivors = all
+    .filter((record) => isFresh(record) && record.sessionId !== protect)
+    .sort((a, b) => b.savedAt - a.savedAt);
+  const room =
+    protect && all.some((r) => r.sessionId === protect)
+      ? MAX_RECORDS - 1
+      : MAX_RECORDS;
+  for (const record of survivors.slice(Math.max(room, 0))) {
+    doomed.add(record.sessionId);
+  }
+  for (const sessionId of doomed) {
+    await runTransaction("readwrite", (store) => store.delete(sessionId));
+  }
 }

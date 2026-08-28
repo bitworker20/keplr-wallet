@@ -963,6 +963,13 @@ export class PokerGameController {
         });
       this.emit({ settlement: reconcile(false) });
 
+      // BEFORE the result goes out, not after. The instant a result is on
+      // chain the opponent can contradict it, and the chain then believes
+      // whoever shows the transcript. Filing first and saving second leaves a
+      // window — one closed tab, one crashed browser — where the result is
+      // contestable and the proof was never written down.
+      await this.keepTranscriptForDefence();
+
       const tx = await this.wallet.submitResult(this.chainId, {
         sessionId: String(session.session_id),
         winner: result.winner ?? "",
@@ -986,12 +993,6 @@ export class PokerGameController {
         )}…), waiting for on-chain settlement…`,
       });
 
-      // The result is the chain's problem now, and if the opponent contradicts
-      // it the chain believes whoever produces the transcript. Ours lives in
-      // the worker's heap, which dies with this tab — so write it down before
-      // that happens (transcript-vault.ts, session 40).
-      await this.keepTranscriptForDefence();
-
       const lcdUrl = this.chainLcdUrl;
       for (let attempt = 0; attempt < 60; attempt++) {
         const res = await fetch(
@@ -1003,7 +1004,7 @@ export class PokerGameController {
           // Nothing left to dispute, so the stored identity is spent and the
           // transcript has nothing left to prove.
           forgetSessionIdentity(this.myIntentId);
-          forgetTranscript(String(session.session_id));
+          await forgetTranscript(String(session.session_id));
           this.emit({
             stage: "done",
             table,
@@ -1058,7 +1059,7 @@ export class PokerGameController {
         this.chainId,
         evidence.signingPayload ?? ""
       );
-      const kept = rememberTranscript({
+      const kept = await rememberTranscript({
         sessionId: String(session.session_id),
         submitter: this.chainAddress,
         payloadHex: evidence.payloadHex,
