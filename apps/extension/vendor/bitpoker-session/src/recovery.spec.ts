@@ -93,8 +93,11 @@ describe("sessionRecovery", () => {
     // is on chain, and the engine decides an empty dispute by refunding. The
     // transcript this browser kept is the whole of the defence, so it goes
     // first — ahead of the reveal, ahead of the verdict.
-    const s = session({ status: "GAME_SESSION_STATUS_DISPUTED" });
-    const holding = sessionRecovery(s, 5, ME, {
+    const s = session({
+      status: "GAME_SESSION_STATUS_DISPUTED",
+      dispute_response_height: "400",
+    });
+    const holding = sessionRecovery(s, 399, ME, {
       keptTranscript: true,
       heldSecret: true,
     });
@@ -102,7 +105,7 @@ describe("sessionRecovery", () => {
     expect(holding.action).toBe("prove");
 
     // Once ours is on chain the order resumes: reveal, then verdict.
-    const filed = sessionRecovery(s, 5, ME, {
+    const filed = sessionRecovery(s, 399, ME, {
       keptTranscript: true,
       myEvidenceOnChain: true,
       evidenceOnChain: true,
@@ -123,30 +126,45 @@ describe("sessionRecovery", () => {
   it("makes a disputed seat reveal its cards before asking for a verdict", () => {
     // Adjudication scores an undisclosed secret as a forfeit, so a client that
     // offered the verdict first would throw away a hand its player had won.
-    const s = session({ status: "GAME_SESSION_STATUS_DISPUTED" });
-    const held = sessionRecovery(s, 5, ME, {
+    const s = session({
+      status: "GAME_SESSION_STATUS_DISPUTED",
+      dispute_response_height: "400",
+    });
+    const held = sessionRecovery(s, 399, ME, {
       heldSecret: true,
       evidenceOnChain: true,
     });
     expect(held.kind).toBe("ready");
     expect(held.action).toBe("reveal");
 
-    const revealed = sessionRecovery(s, 5, ME, { evidenceOnChain: true });
+    const revealed = sessionRecovery(s, 399, ME, { evidenceOnChain: true });
     expect(revealed.action).toBe("adjudicate");
-    expect(revealed.kind).toBe("ready");
+    expect(revealed.kind).toBe("wait");
+    expect(revealed.atHeight).toBe(400);
   });
 
-  it("waits out the dispute deadline when nobody submitted evidence", () => {
-    // The chain rejects an adjudication it cannot run, and only starts
-    // refunding both stakes instead once the deadline has passed.
+  it("adjudicates exactly at the response boundary", () => {
     const s = session({
       status: "GAME_SESSION_STATUS_DISPUTED",
-      dispute_deadline_height: "400",
+      dispute_response_height: "400",
     });
     expect(sessionRecovery(s, 399, ME).kind).toBe("wait");
     expect(sessionRecovery(s, 399, ME).action).toBe("adjudicate");
     expect(sessionRecovery(s, 400, ME).kind).toBe("ready");
-    expect(sessionRecovery(s, 400, ME).reason).toMatch(/refunds both stakes/);
+    expect(sessionRecovery(s, 400, ME).action).toBe("adjudicate");
+  });
+
+  it("does not submit late evidence or secrets after responses freeze", () => {
+    const s = session({
+      status: "GAME_SESSION_STATUS_DISPUTED",
+      dispute_response_height: "400",
+    });
+    const frozen = sessionRecovery(s, 400, ME, {
+      keptTranscript: true,
+      heldSecret: true,
+    });
+    expect(frozen.kind).toBe("ready");
+    expect(frozen.action).toBe("adjudicate");
   });
 
   it("keeps asking for a verdict even after the refund hatch opens", () => {
@@ -157,7 +175,7 @@ describe("sessionRecovery", () => {
     // to lose the verdict refund its stake back out of it (ADR-008 §2.5).
     const s = session({
       status: "GAME_SESSION_STATUS_DISPUTED",
-      dispute_deadline_height: "400",
+      dispute_response_height: "400",
       dispute_refund_height: "900",
     });
 
@@ -176,7 +194,7 @@ describe("sessionRecovery", () => {
   it("offers the no-engine refund only once the chain refused a verdict", () => {
     const s = session({
       status: "GAME_SESSION_STATUS_DISPUTED",
-      dispute_deadline_height: "400",
+      dispute_response_height: "400",
       dispute_refund_height: "900",
     });
 
@@ -196,17 +214,17 @@ describe("sessionRecovery", () => {
     expect(refused.reason).toMatch(/without the engine/);
   });
 
-  it("still reveals a held secret before asking for a verdict", () => {
+  it("reveals a held secret while the response window is open", () => {
     // Revealing is never worse for this seat: an UNDISCLOSED secret is scored
     // as a forfeit, and the key is per-hand and already spent. The old rule
     // skipped the reveal to "avoid needless disclosure" and paid for it with
     // the outcome.
     const s = session({
       status: "GAME_SESSION_STATUS_DISPUTED",
-      dispute_deadline_height: "400",
+      dispute_response_height: "400",
       dispute_refund_height: "900",
     });
-    const held = sessionRecovery(s, 99999, ME, {
+    const held = sessionRecovery(s, 399, ME, {
       heldSecret: true,
       evidenceOnChain: true,
     });
@@ -216,7 +234,7 @@ describe("sessionRecovery", () => {
   it("does not guess a refund height for unmigrated legacy state", () => {
     const s = session({
       status: "GAME_SESSION_STATUS_DISPUTED",
-      dispute_deadline_height: "400",
+      dispute_response_height: "400",
     });
     const recovery = sessionRecovery(s, 99999, ME, {
       evidenceOnChain: true,

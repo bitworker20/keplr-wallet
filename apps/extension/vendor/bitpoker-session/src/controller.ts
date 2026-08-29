@@ -1109,7 +1109,7 @@ export class PokerGameController {
       if (evidence.error) {
         throw new Error(evidence.error);
       }
-      // The evidence signing payload carries the bitpoker-session-evidence-v1
+      // The evidence signing payload carries the bitpoker-session-evidence-v2
       // domain prefix, so the raw signer accepts it.
       const signed = await this.wallet.signPayload(
         this.chainId,

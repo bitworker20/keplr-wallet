@@ -22,6 +22,11 @@ describe("txFailureClass", () => {
     expect(txFailureClass(1, "pokerchain")).toBe("terminal");
   });
 
+  it("defers adjudication until the recorded response height", () => {
+    expect(txFailureClass(1110, "pokerchain")).toBe("deferred");
+    expect(txFailureClass(1111, "pokerchain")).toBe("terminal");
+  });
+
   it("does not call success a failure", () => {
     expect(txFailureClass(0, "sdk")).toBe("transient");
   });

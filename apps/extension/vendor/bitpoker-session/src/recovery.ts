@@ -23,7 +23,8 @@
 //
 // A DISPUTED session otherwise needs the other three, in order:
 //
-//   MsgSubmitSessionEvidence            put this hand's transcript on chain.
+//   MsgSubmitSessionEvidence            put this hand's transcript on chain
+//                                       before dispute_response_height.
 //                                       A dispute is decided by whichever
 //                                       transcript reaches the engine, and with
 //                                       none on chain the engine decides
@@ -33,16 +34,14 @@
 //                                       (session 40). transcript-vault.ts is
 //                                       what still has it after the tab that
 //                                       played the hand is gone.
-//   MsgSubmitSessionSecret              disclose this seat's per-hand key, so
+//   MsgSubmitSessionSecret              disclose this seat's per-hand key
+//                                       before the same response height, so
 //                                       the engine scores the cards this
 //                                       player actually held instead of
 //                                       treating the hand as forfeited
-//   MsgAdjudicateSession                run the engine and pay out. Until
-//                                       dispute_deadline_height only the two
-//                                       players may send it; after that anyone
-//                                       may. Prefer this over the refund hatch
-//                                       while the hatch is still closed — a
-//                                       real verdict always beats waiting.
+//   MsgAdjudicateSession                at dispute_response_height, run the
+//                                       engine once over both frozen response
+//                                       slots and pay out.
 //
 // A client that never offers these leaves the player watching an escrow they
 // cannot touch. The native client does it from its retreat flow
@@ -67,6 +66,8 @@ export interface ChainGameSession {
   player_a_intent_id?: string;
   player_b_intent_id?: string;
   dispute_deadline_height?: string;
+  // Evidence/secret submissions close and adjudication opens at this height.
+  dispute_response_height?: string;
   // Snapshotted on entry to DISPUTED. Zero/absent means legacy state has not
   // been migrated; never reconstruct it from mutable params in the client.
   dispute_refund_height?: string;
@@ -207,6 +208,10 @@ export function sessionRecovery(
   }
 
   if (session.status === DISPUTED) {
+    const responseAt = Number(session.dispute_response_height ?? "0");
+    const hasResponseBoundary =
+      Number.isSafeInteger(responseAt) && responseAt > 0;
+    const responseOpen = !hasResponseBoundary || chainHeight < responseAt;
     const refundAt = Number(session.dispute_refund_height ?? "0");
     const hatchOpen =
       Number.isSafeInteger(refundAt) && refundAt > 0 && chainHeight >= refundAt;
@@ -238,7 +243,7 @@ export function sessionRecovery(
     // transcripts on chain; holding the only copy of ours while asking for a
     // verdict asks the chain to decide on the opponent's version of it — or,
     // with nothing on chain at all, to refund a hand we may have won.
-    if (dispute.keptTranscript && !dispute.myEvidenceOnChain) {
+    if (responseOpen && dispute.keptTranscript && !dispute.myEvidenceOnChain) {
       return {
         kind: "ready",
         action: "prove",
@@ -250,7 +255,7 @@ export function sessionRecovery(
     }
     // Reveal before verdict: an undisclosed secret is scored as a forfeit, so
     // asking for a verdict while still holding one throws the hand away.
-    if (dispute.heldSecret) {
+    if (responseOpen && dispute.heldSecret) {
       return {
         kind: "ready",
         action: "reveal",
@@ -259,6 +264,24 @@ export function sessionRecovery(
           "under dispute — reveal your cards first, or the adjudicator " +
           "scores this hand as forfeited",
       };
+    }
+    if (hasResponseBoundary) {
+      return chainHeight < responseAt
+        ? {
+            kind: "wait",
+            action: "adjudicate",
+            atHeight: responseAt,
+            reason:
+              "your response is complete — waiting for the opponent's response window to close",
+          }
+        : {
+            kind: "ready",
+            action: "adjudicate",
+            atHeight: responseAt,
+            reason: hatchOpen
+              ? "responses are frozen — ask the chain for a verdict; if it cannot give one, a no-engine refund is available"
+              : "responses are frozen — ask the chain for a verdict",
+          };
     }
     const deadline = Number(session.dispute_deadline_height ?? "0");
     if (dispute.evidenceOnChain) {

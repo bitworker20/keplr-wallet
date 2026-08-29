@@ -70,7 +70,7 @@ const ALLOWED_PAYLOAD_PREFIXES = [
   // Relay ClientHello auth ("cosmos-signature-v1"), relay_protocol.cpp
   "bitpoker-relay-client-hello-v1\n",
   // submit-session-evidence authentication (ADR-003)
-  "bitpoker-session-evidence-v1\n",
+  "bitpoker-session-evidence-v2\n",
 ];
 
 // Gas CEILINGS for the poker messages: a tx reserves the simulated estimate

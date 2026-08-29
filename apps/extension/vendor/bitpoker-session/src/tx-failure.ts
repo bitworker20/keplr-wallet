@@ -29,6 +29,10 @@ export const POKERCHAIN_CODESPACE = "pokerchain";
 // reads as terminal (it is a module error) but the remedy is local and the
 // opposite of stopping: file the transcript this client kept, then ask again.
 export const CODE_ADJUDICATION_NO_EVIDENCE = 1109;
+// Adjudication is valid, but only once the session's response height is
+// reached. Callers should wait for that height rather than retrying now or
+// permanently closing the route.
+export const CODE_DISPUTE_RESPONSE_WINDOW_OPEN = 1110;
 
 export function isAdjudicationNoEvidence(
   code: number,
@@ -45,6 +49,8 @@ export type TxFailureClass =
   | "transient"
   // The message is right but the budget was not. Worth one repriced retry.
   | "underfunded"
+  // The message is valid after a height recorded in chain state.
+  | "deferred"
   // The chain refused it on its merits and will refuse it again for as long as
   // the session looks the way it does now.
   | "terminal";
@@ -63,6 +69,12 @@ export function txFailureClass(
 ): TxFailureClass {
   if (!code) {
     return "transient"; // not a failure; the caller should not be asking
+  }
+  if (
+    code === CODE_DISPUTE_RESPONSE_WINDOW_OPEN &&
+    codespace === POKERCHAIN_CODESPACE
+  ) {
+    return "deferred";
   }
   if (codespace && codespace !== SDK_CODESPACE) {
     return "terminal";
