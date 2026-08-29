@@ -25,7 +25,11 @@ import {
   forgetSessionIdentity,
   rememberSessionIdentity,
 } from "./session-vault";
-import { forgetTranscript, rememberTranscript } from "./transcript-vault";
+import {
+  forgetTranscript,
+  rememberCheckpoint,
+  rememberTranscript,
+} from "./transcript-vault";
 import { PokerWorkerClient } from "./worker-client";
 import {
   HandEffect,
@@ -899,6 +903,7 @@ export class PokerGameController {
     }
     const table = await this.worker.tableState();
     this.emit({ table });
+    await this.keepCheckpoint(table?.handResult?.handNumber);
     // The gamecore reports only the peer's LATEST move, with a monotonic seq;
     // anything newer than what we logged is a move we have not recorded yet.
     const peerAction = table?.peerAction;
@@ -1023,6 +1028,54 @@ export class PokerGameController {
         stage: "error",
         table,
         message: e?.message ?? String(e),
+      });
+    }
+  }
+
+  // Write down the checkpoint the moment a hand settles (ADR-010).
+  //
+  // The transcript below is kept once, when a result is filed — which only
+  // happens if the session reaches its end. A session interrupted three hands
+  // in never gets there, and without this the tab dies holding nothing: the
+  // only exit left is splitting the buy-ins back, erasing hands that both
+  // players had already signed. That is sessions 45 and 46 on the private
+  // testnet, and it cost the seat that stayed 3.7 CHIP it had won.
+  //
+  // Driven off handResult.handNumber, which the gamecore advances exactly once
+  // per settled hand, so this costs one worker call per hand rather than per
+  // frame.
+  protected lastCheckpointHand = 0;
+
+  protected async keepCheckpoint(handNumber?: number): Promise<void> {
+    const session = this.chainSession;
+    if (!session || !handNumber || handNumber <= this.lastCheckpointHand) {
+      return;
+    }
+    this.lastCheckpointHand = handNumber;
+    try {
+      const checkpoint = await this.worker.checkpoint();
+      if (!checkpoint?.settleHex || checkpoint.handId === undefined) {
+        return;
+      }
+      const kept = await rememberCheckpoint(
+        String(session.session_id),
+        this.chainAddress,
+        { handId: checkpoint.handId, settleHex: checkpoint.settleHex }
+      );
+      if (!kept) {
+        this.emit({
+          message:
+            "this browser could not store the settled hand, so leaving now " +
+            "would only refund the buy-ins instead of the standings you played to",
+        });
+      }
+    } catch (e: any) {
+      // Never fails the hand: what is lost is a better exit later, not the
+      // game in front of the player.
+      this.emit({
+        message: `settled hand not stored (${
+          e?.message ?? String(e)
+        }) — leaving now would only refund the buy-ins`,
       });
     }
   }

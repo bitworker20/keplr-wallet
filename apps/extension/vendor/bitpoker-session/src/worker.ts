@@ -51,6 +51,18 @@ async function handle(cmd: string, args: any): Promise<any> {
           );
     return true;
   }
+  // Stateless helpers, answered before the hand guard: a recovery card days
+  // later is a fresh tab whose gamecore never played this session.
+  if (cmd === "buildCheckpointSessionResult") {
+    return m.buildCheckpointSessionResult(
+      args.chainSessionId,
+      args.playerA,
+      args.playerB,
+      args.finalStake,
+      args.localAddress,
+      args.settleHex
+    );
+  }
   if (!hand) {
     throw new Error("no hand session; call newHand first");
   }
@@ -81,6 +93,8 @@ async function handle(cmd: string, args: any): Promise<any> {
         args.relayFee,
         args.localAddress
       );
+    case "checkpoint":
+      return hand.checkpoint();
     case "onPeerSessionHello":
       return hand.onPeerSessionHello(args.frame);
     case "setSessionSeed":

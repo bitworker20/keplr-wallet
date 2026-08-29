@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { formatChip } from "@bitpoker/poker-session/chip";
 import { fetchChainHeight } from "@bitpoker/poker-session/lobby";
 import {
+  ChainGameSession,
   RecoverableSession,
   RecoveryAction,
   fetchRecoverableSessions,
@@ -10,7 +11,11 @@ import {
   forgetSessionIdentity,
   sessionIdentityForIntent,
 } from "@bitpoker/poker-session/session-vault";
-import { transcriptForSession } from "@bitpoker/poker-session/transcript-vault";
+import {
+  checkpointForSession,
+  transcriptForSession,
+} from "@bitpoker/poker-session/transcript-vault";
+import { checkpointResult } from "@bitpoker/poker-session/checkpoint-result";
 import { txFailureClass } from "@bitpoker/poker-session/tx-failure";
 import { PokerWalletBridge } from "@bitpoker/poker-session/wallet-bridge";
 import { styles } from "./styles";
@@ -37,6 +42,7 @@ const ACTION_LABELS: Record<RecoveryAction, string> = {
   prove: "File your transcript",
   reveal: "Reveal your cards",
   adjudicate: "Ask for a verdict",
+  checkpoint: "File the last settled hand",
 };
 
 export const Recovery: React.FC<{
@@ -86,7 +92,49 @@ export const Recovery: React.FC<{
   }, [refresh]);
 
   const run = useCallback(
-    async (action: RecoveryAction, sessionId: string, intentId?: string) => {
+    async (
+      action: RecoveryAction,
+      sessionId: string,
+      intentId: string | undefined,
+      session: ChainGameSession
+    ) => {
+      // ADR-010: an interrupted session that already settled hands is not an
+      // abandoned one. Filing the last hand both seats signed settles at the
+      // real standings; waiting out the timeout instead pays the buy-ins back
+      // and erases them.
+      if (action === "checkpoint") {
+        const checkpoint = await checkpointForSession(sessionId, myAddress);
+        if (!checkpoint) {
+          throw new Error(
+            "this browser no longer holds a settled hand for that session"
+          );
+        }
+        // Derived from the double-signed bytes, not from anything stored
+        // beside them: what this files has to be what the opponent's own
+        // independent filing produces, or the two collide into a dispute.
+        const result = await checkpointResult({
+          chainSessionId: sessionId,
+          playerA: session.player_a,
+          playerB: session.player_b,
+          finalStake: session.stake,
+          localAddress: myAddress,
+          settleHex: checkpoint.settleHex,
+        });
+        if (result.error) {
+          throw new Error(result.error);
+        }
+        return wallet.submitResult(chainId, {
+          sessionId,
+          winner: result.winner ?? "",
+          loser: result.loser ?? "",
+          finalStake: result.finalStake ?? session.stake,
+          transcriptHash: result.transcriptHash ?? "",
+          resultSignature: result.resultSignature ?? "",
+          splitPot: result.splitPot ?? false,
+          playerAAmount: result.playerAAmount ?? "0",
+          playerBAmount: result.playerBAmount ?? "0",
+        });
+      }
       if (action === "prove") {
         const kept = await transcriptForSession(sessionId, myAddress);
         if (!kept) {
@@ -131,7 +179,7 @@ export const Recovery: React.FC<{
       setBusyId(sessionId);
       setError("");
       try {
-        const result = await run(recovery.action, sessionId, intentId);
+        const result = await run(recovery.action, sessionId, intentId, session);
         if (result.code !== 0) {
           setError(
             result.rawLog || `the chain refused it (code ${result.code})`

@@ -24,6 +24,61 @@ describe("sessionRecovery", () => {
     expect(sessionRecovery(s, 1000, ME).action).toBe("refund");
   });
 
+  // ADR-010. Every deadline in this branch pays the buy-ins back, which is the
+  // wrong answer once hands have actually been settled: sessions 45 and 46 on
+  // the private testnet erased two hands of double-signed results that way, and
+  // the seat that stayed lost 3.7 CHIP it had won.
+  it("files a settled hand instead of waiting out an abandoned session", () => {
+    const s = session({});
+    expect(sessionRecovery(s, 999, ME, { keptCheckpoint: true })).toMatchObject(
+      {
+        kind: "ready",
+        action: "checkpoint",
+      }
+    );
+    // Without one there is nothing better than the timeout.
+    expect(sessionRecovery(s, 999, ME).action).toBe("refund");
+  });
+
+  it("prefers the checkpoint over the short relay-answer refund too", () => {
+    const s = session({
+      relay_answer_deadline_height: "200",
+      active_deadline_height: "10000",
+    });
+    expect(sessionRecovery(s, 500, ME, { keptCheckpoint: true }).action).toBe(
+      "checkpoint"
+    );
+  });
+
+  it("answers an opponent's result with the checkpoint rather than nothing", () => {
+    const s = session({
+      status: "GAME_SESSION_STATUS_RESULT_PENDING",
+      result_deadline_height: "500",
+      player_b_result: {},
+    });
+    // With no result of our own the chain will not let us claim, and the old
+    // answer was to say so and stop. An identical filing settles cooperatively;
+    // a contradicting one goes to an engine that reads the same checkpoint.
+    expect(sessionRecovery(s, 100, ME).kind).toBe("none");
+    expect(sessionRecovery(s, 100, ME, { keptCheckpoint: true })).toMatchObject(
+      { kind: "ready", action: "checkpoint" }
+    );
+  });
+
+  it("does not let a checkpoint pre-empt a live dispute", () => {
+    // Once the session is DISPUTED the money is decided by the engine, and the
+    // response window is the only thing that matters. Offering "file a result"
+    // there would send a message the chain refuses in that state.
+    const s = session({
+      status: "GAME_SESSION_STATUS_DISPUTED",
+      dispute_response_height: "900",
+      dispute_refund_height: "5000",
+    });
+    expect(
+      sessionRecovery(s, 100, ME, { keptCheckpoint: true }).action
+    ).not.toBe("checkpoint");
+  });
+
   it("uses the much shorter relay-answer deadline when no relay answered", () => {
     // ADR-007: neither player could have played, so they do not wait out the
     // full abandoned-session window.

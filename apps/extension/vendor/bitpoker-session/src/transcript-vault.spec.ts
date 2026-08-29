@@ -1,7 +1,9 @@
 import {
   MAX_PAYLOAD_BYTES,
+  checkpointForSession,
   forgetTranscript,
   pruneTranscripts,
+  rememberCheckpoint,
   rememberTranscript,
   transcriptForSession,
 } from "./transcript-vault";
@@ -195,5 +197,89 @@ describe("transcript vault", () => {
     // And it recovers the moment storage works again.
     installIndexedDb(() => settle(new FakeRequest<FakeDb>(), db));
     expect(await rememberTranscript(TRANSCRIPT)).toBe(true);
+  });
+});
+
+// ADR-010 checkpoints. Written at the end of every hand, whereas the transcript
+// above is written once, when a result is filed — a session that is interrupted
+// mid-play only ever has the former.
+describe("checkpoint vault", () => {
+  beforeEach(() => {
+    db = new FakeDb();
+    installIndexedDb(() => settle(new FakeRequest<FakeDb>(), db));
+  });
+
+  const CP1 = { handId: 0, settleHex: "aabb" };
+  const CP2 = { handId: 1, settleHex: "ccdd" };
+
+  it("keeps a checkpoint with no transcript at all", async () => {
+    expect(await rememberCheckpoint("40", ME, CP1)).toBe(true);
+    expect(await checkpointForSession("40", ME)).toEqual(CP1);
+    // The evidence path is unaffected: there is still no transcript to file.
+    expect(await transcriptForSession("40", ME)).toBeUndefined();
+  });
+
+  it("advances with the hand and keeps the one it replaces", async () => {
+    await rememberCheckpoint("40", ME, CP1);
+    expect(await rememberCheckpoint("40", ME, CP2)).toBe(true);
+    expect(await checkpointForSession("40", ME)).toEqual(CP2);
+  });
+
+  it("ignores a stale write rather than walking backwards", async () => {
+    await rememberCheckpoint("40", ME, CP2);
+    // A late write from a worker that is a hand behind must not hand the
+    // opponent back a hand they already lost.
+    expect(await rememberCheckpoint("40", ME, CP1)).toBe(true);
+    expect(await checkpointForSession("40", ME)).toEqual(CP2);
+  });
+
+  it("refuses a different settle for a hand it already holds", async () => {
+    await rememberCheckpoint("40", ME, CP1);
+    // Two double-signed settles for one hand is equivocation. This seat is not
+    // the place to choose between them — the engine is.
+    expect(
+      await rememberCheckpoint("40", ME, { handId: 0, settleHex: "9999" })
+    ).toBe(false);
+    expect(await checkpointForSession("40", ME)).toEqual(CP1);
+  });
+
+  it("accepts a byte-identical rewrite of the hand it holds", async () => {
+    await rememberCheckpoint("40", ME, CP1);
+    expect(await rememberCheckpoint("40", ME, { ...CP1 })).toBe(true);
+  });
+
+  it("never crosses seats on a shared browser", async () => {
+    await rememberCheckpoint("40", ME, CP1);
+    expect(await rememberCheckpoint("40", "xpoker1else", CP2)).toBe(false);
+    expect(await checkpointForSession("40", "xpoker1else")).toBeUndefined();
+    expect(await checkpointForSession("40", ME)).toEqual(CP1);
+  });
+
+  it("rejects malformed checkpoints", async () => {
+    expect(
+      await rememberCheckpoint("40", ME, { handId: 0, settleHex: "" })
+    ).toBe(false);
+    expect(
+      await rememberCheckpoint("40", ME, { handId: 0, settleHex: "zz" })
+    ).toBe(false);
+    expect(
+      await rememberCheckpoint("40", ME, { handId: -1, settleHex: "aabb" })
+    ).toBe(false);
+  });
+
+  it("survives the transcript being written at the end of the session", async () => {
+    await rememberCheckpoint("40", ME, CP2);
+    // The result-filing path writes the transcript into the same record; it
+    // must carry the checkpoints forward rather than replacing them with
+    // nothing, or the retreat that follows a failed broadcast has no exit.
+    expect(await rememberTranscript(TRANSCRIPT)).toBe(true);
+    expect(await checkpointForSession("40", ME)).toEqual(CP2);
+    expect(await transcriptForSession("40", ME)).toBeDefined();
+  });
+
+  it("forgets checkpoints with the session", async () => {
+    await rememberCheckpoint("40", ME, CP1);
+    await forgetTranscript("40");
+    expect(await checkpointForSession("40", ME)).toBeUndefined();
   });
 });

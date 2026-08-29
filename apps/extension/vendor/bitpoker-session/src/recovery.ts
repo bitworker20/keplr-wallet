@@ -49,7 +49,7 @@
 // same idea: say what is recoverable, and let the player press the button.
 
 import { sessionIdentityForIntent } from "./session-vault";
-import { transcriptForSession } from "./transcript-vault";
+import { checkpointForSession, transcriptForSession } from "./transcript-vault";
 
 export interface ChainGameSession {
   session_id: string;
@@ -92,6 +92,12 @@ export interface DisputeContext {
   // amount of gas or patience changes that. It is the only thing that opens the
   // no-engine refund, so the verdict always gets its chance first.
   adjudicationRefused?: boolean;
+  // This browser holds the last double-signed settle of a completed hand
+  // (transcript-vault.ts). It is the ADR-010 checkpoint, and it turns an
+  // interrupted session from "wait fourteen hours and get your buy-in back"
+  // into "file what both of us already signed" — which, when both seats do it
+  // independently, settles cooperatively at the real standings.
+  keptCheckpoint?: boolean;
 }
 
 // Whether the claim can be sent yet.
@@ -111,7 +117,9 @@ export type RecoveryAction =
   | "escalate"
   | "prove"
   | "reveal"
-  | "adjudicate";
+  | "adjudicate"
+  // File the last double-signed settle as this session's result (ADR-010).
+  | "checkpoint";
 
 export interface SessionRecovery {
   kind: RecoveryKind;
@@ -162,6 +170,23 @@ export function sessionRecovery(
     if (session.player_a_result || session.player_b_result) {
       return none("a result has already been submitted");
     }
+    // A checkpoint beats every deadline below it. Those all pay the buy-ins
+    // back, which is the wrong answer for a session that got two hands in: the
+    // hands that finished were settled by both signatures and the money has
+    // already moved. Filing it is also the only exit that does not need the
+    // opponent to be present — an identical filing from them settles
+    // cooperatively, and a contradicting one goes to an engine that will read
+    // the same checkpoint.
+    if (dispute.keptCheckpoint) {
+      return {
+        kind: "ready",
+        action: "checkpoint",
+        atHeight: 0,
+        reason:
+          "file the last hand you and your opponent both signed, and settle at " +
+          "those standings instead of waiting out the abandonment timeout",
+      };
+    }
     // ADR-007: a session no relay ever answered has a much shorter deadline —
     // neither player could have played it.
     const answerDeadline = Number(session.relay_answer_deadline_height ?? "0");
@@ -193,6 +218,16 @@ export function sessionRecovery(
     if (!mine) {
       // The chain only lets the seat that already submitted claim here, and
       // submitting is the better move anyway: two matching results settle.
+      if (dispute.keptCheckpoint) {
+        return {
+          kind: "ready",
+          action: "checkpoint",
+          atHeight: 0,
+          reason:
+            "your opponent filed a result — file the last hand you both signed; " +
+            "if it agrees the session settles, and if it does not the engine decides",
+        };
+      }
       return none("submit your result first");
     }
     const deadline = Number(session.result_deadline_height ?? "0");
@@ -412,13 +447,22 @@ export async function fetchRecoverableSessions(
       // Only a disputed session needs the extra two questions, and they cost a
       // request each.
       const intentId = myIntentId(session, address);
-      let dispute: DisputeContext = {};
+      // The checkpoint question is asked for every unfinished session, not only
+      // disputed ones: it is what ACTIVE and RESULT_PENDING now offer instead
+      // of waiting out a timeout, and it is a local read.
+      let dispute: DisputeContext = {
+        keptCheckpoint: !!(await checkpointForSession(
+          session.session_id,
+          address
+        )),
+      };
       if (session.status === DISPUTED) {
         const submitters = await fetchEvidenceSubmitters(
           base,
           session.session_id
         );
         dispute = {
+          ...dispute,
           heldSecret: !!(intentId && sessionIdentityForIntent(intentId)),
           evidenceOnChain: submitters.length > 0,
           keptTranscript: !!(await transcriptForSession(

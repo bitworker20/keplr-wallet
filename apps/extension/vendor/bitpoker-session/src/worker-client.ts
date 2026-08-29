@@ -109,6 +109,38 @@ export class PokerWorkerClient {
   }> {
     return this.call("buildSessionResult", args);
   }
+  /**
+   * The ADR-010 checkpoint: the most recent double-signed settle, refreshed at
+   * the end of every hand. Empty until the first hand completes.
+   */
+  checkpoint(): Promise<{ handId?: number; settleHex?: string }> {
+    return this.call("checkpoint", {});
+  }
+  /**
+   * Rebuild a submit-session-result from persisted checkpoint bytes. Needs no
+   * live hand — this is what a recovery card in a fresh tab calls.
+   */
+  buildCheckpointSessionResult(args: {
+    chainSessionId: string;
+    playerA: string;
+    playerB: string;
+    finalStake: string;
+    localAddress: string;
+    settleHex: string;
+  }): Promise<{
+    error?: string;
+    handId?: number;
+    winner?: string;
+    loser?: string;
+    splitPot?: boolean;
+    finalStake?: string;
+    transcriptHash?: string;
+    resultSignature?: string;
+    playerAAmount?: string;
+    playerBAmount?: string;
+  }> {
+    return this.call("buildCheckpointSessionResult", args);
+  }
   onPeerSessionHello(frame: Uint8Array): Promise<MatchedResult> {
     return this.call("onPeerSessionHello", { frame });
   }

@@ -48,6 +48,16 @@ export const MAX_PAYLOAD_BYTES = 1024 * 1024;
 // settled within a week is past every deadline the chain has.
 const MAX_RECORDS = 8;
 
+// One completed hand's double-signed settle: the ADR-010 checkpoint.
+//
+// `settleHex` is the packed settle BODY (PackSettleMsg), which both seats hold
+// byte-identically — that is what makes two independent retreats file the same
+// result and settle cooperatively instead of colliding into a dispute.
+export interface KeptCheckpoint {
+  handId: number;
+  settleHex: string;
+}
+
 export interface KeptTranscript {
   sessionId: string;
   // The account that filed the result this transcript proves. Stored so a
@@ -62,13 +72,21 @@ export interface KeptTranscript {
   signature: string;
   reason: string;
   savedAt: number;
+  // The latest checkpoint, and the one before it. Two are kept because schema-2
+  // evidence has to be able to prove the rollback target when the two seats
+  // reveal conflicting settles at the same hand (ADR-010 §2.1).
+  checkpoint?: KeptCheckpoint;
+  previousCheckpoint?: KeptCheckpoint;
 }
 
 // The stored shape: the payload as bytes rather than hex, which is half the
 // size and what IndexedDB is good at. Hex is the interchange format at the
 // edges (the chain message wants it), not the storage format.
+// A record may hold a checkpoint with no transcript: the checkpoint is written
+// at the end of every hand, while the transcript is written once, when a result
+// is filed. An interrupted session never reaches the second.
 interface StoredTranscript extends Omit<KeptTranscript, "payloadHex"> {
-  payload: Uint8Array;
+  payload?: Uint8Array;
 }
 
 function hexToBytes(hex: string): Uint8Array | undefined {
@@ -191,6 +209,12 @@ export async function rememberTranscript(
     // for. Reporting false lets the caller say so instead of implying cover.
     return false;
   }
+  // Checkpoints are written per hand and the transcript once, at the end. They
+  // share a record, so carry the existing ones forward rather than replacing
+  // them with nothing.
+  const existing = await runTransaction<StoredTranscript>("readonly", (store) =>
+    store.get(transcript.sessionId)
+  );
   const record: StoredTranscript = {
     sessionId: transcript.sessionId,
     submitter: transcript.submitter,
@@ -199,6 +223,8 @@ export async function rememberTranscript(
     signature: transcript.signature,
     reason: transcript.reason,
     savedAt: Date.now(),
+    checkpoint: existing?.checkpoint,
+    previousCheckpoint: existing?.previousCheckpoint,
   };
   const stored = await runTransaction("readwrite", (store) =>
     store.put(record)
@@ -230,6 +256,98 @@ export async function transcriptForSession(
   }
   const { payload, ...rest } = record;
   return { ...rest, payloadHex: bytesToHex(payload) };
+}
+
+// Store the checkpoint for a session at the end of a hand. Returns false when
+// it could not be kept, which is the difference between a retreat that settles
+// at the real standings and one that can only split the buy-ins back.
+//
+// The rules mirror client/transcript_vault.cpp, and each exists for a reason:
+//
+//   - hand ids only move FORWARD. A late write from a stale worker must not
+//     walk the checkpoint backwards and hand the opponent back a hand they
+//     already lost.
+//   - a DIFFERENT settle for a hand id already held is refused outright. Two
+//     double-signed settles for one hand is equivocation, and this seat is not
+//     the place to pick between them — the engine is.
+//   - advancing keeps the one it replaces, because schema-2 evidence needs the
+//     previous checkpoint as the rollback target.
+export async function rememberCheckpoint(
+  sessionId: string,
+  submitter: string,
+  checkpoint: KeptCheckpoint
+): Promise<boolean> {
+  if (
+    !sessionId ||
+    !submitter ||
+    !checkpoint.settleHex ||
+    !Number.isInteger(checkpoint.handId) ||
+    checkpoint.handId < 0 ||
+    !hexToBytes(checkpoint.settleHex)
+  ) {
+    return false;
+  }
+  const existing = await runTransaction<StoredTranscript>("readonly", (store) =>
+    store.get(sessionId)
+  );
+  if (existing && existing.submitter && existing.submitter !== submitter) {
+    // A browser shared by both seats: never overwrite one seat's proof with the
+    // other's. The chain would refuse a result filed under the wrong address.
+    return false;
+  }
+  let previousCheckpoint = existing?.previousCheckpoint;
+  const held = existing?.checkpoint;
+  if (held) {
+    if (checkpoint.handId < held.handId) {
+      return true; // stale write; what is stored is already better
+    }
+    if (checkpoint.handId === held.handId) {
+      return held.settleHex === checkpoint.settleHex;
+    }
+    previousCheckpoint = held;
+  }
+  const record: StoredTranscript = {
+    ...(existing ?? {
+      sessionId,
+      submitter,
+      evidenceHash: "",
+      signature: "",
+      reason: "",
+    }),
+    sessionId,
+    submitter,
+    savedAt: Date.now(),
+    checkpoint,
+    previousCheckpoint,
+  };
+  const stored = await runTransaction("readwrite", (store) =>
+    store.put(record)
+  );
+  if (stored === undefined) {
+    return false;
+  }
+  await pruneTranscripts(sessionId);
+  return true;
+}
+
+// The checkpoint this account can file a cooperative result from, if any.
+// Deliberately does NOT require a stored transcript: a session interrupted
+// mid-play has checkpoints and no transcript, and that is the case this whole
+// path exists for.
+export async function checkpointForSession(
+  sessionId: string,
+  submitter?: string
+): Promise<KeptCheckpoint | undefined> {
+  const record = await runTransaction<StoredTranscript>("readonly", (store) =>
+    store.get(sessionId)
+  );
+  if (!record || !record.checkpoint || !isFresh(record)) {
+    return undefined;
+  }
+  if (submitter && record.submitter && record.submitter !== submitter) {
+    return undefined;
+  }
+  return record.checkpoint;
 }
 
 // Called once the session can no longer be disputed (SETTLED/CANCELLED), or
