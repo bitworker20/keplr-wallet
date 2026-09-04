@@ -36,9 +36,10 @@ async function handle(cmd: string, args: any): Promise<any> {
     if (hand) {
       hand.delete();
     }
-    // Switch, not a ternary: adding a game must be a compile-time edit here,
-    // not something that silently falls through to Hold'em and deals the wrong
-    // number of hole cards.
+    // Explicit per game, and an unknown one throws rather than defaulting.
+    // `args.game` crosses a postMessage boundary, so the PokerGame type is not
+    // enforced here at runtime; a silent fall-through to Hold'em would deal the
+    // wrong number of hole cards and desync against the peer instead of failing.
     if (args.game === "ZJH") {
       hand = new m.ZhaJinHuaHand(
         args.firstChips | 0,
@@ -52,13 +53,15 @@ async function handle(cmd: string, args: any): Promise<any> {
         args.localSeat | 0,
         args.button | 0
       );
-    } else {
+    } else if (args.game === "TH" || args.game === undefined) {
       hand = new m.TexasHoldemHand(
         args.firstChips | 0,
         args.secondChips | 0,
         args.localSeat | 0,
         args.button | 0
       );
+    } else {
+      throw new Error(`unsupported game: ${String(args.game)}`);
     }
     return true;
   }

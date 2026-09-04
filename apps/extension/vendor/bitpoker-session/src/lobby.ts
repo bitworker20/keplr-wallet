@@ -41,6 +41,24 @@ export function localGameName(chainGameType: string): PokerGame | undefined {
   return undefined;
 }
 
+// The display name for a chain game-type NUMBER, for the screens that only ever
+// see the enum value — above all the intent-approval dialog, which is the last
+// thing a player reads before their stake is escrowed. An id this client does
+// not know comes back named as such rather than as some other game.
+export function chainGameTypeName(gameTypeId: number): string {
+  const label: Record<PokerGame, string> = {
+    TH: "Texas Hold'em",
+    ZJH: "ZhaJinHua",
+    O8: "Omaha Hi-Lo",
+  };
+  for (const [, id, local] of CHAIN_GAME_TYPES) {
+    if (Number(id) === gameTypeId) {
+      return label[local];
+    }
+  }
+  return `unknown game (type ${gameTypeId})`;
+}
+
 // The other direction: the enum NUMBER a MsgOpenGameIntent carries. The chain
 // parses these as integers, so this is the value that goes on the wire.
 export function chainGameTypeId(game: PokerGame): number {

@@ -77,7 +77,34 @@ export class ProtoWriter {
   }
 }
 
+export const POKERCHAIN_GAME_TYPE_ZJH = 2;
 export const POKERCHAIN_GAME_TYPE_TH = 3;
+export const POKERCHAIN_GAME_TYPE_O8 = 4;
+
+// Every game type this extension may open an intent for, with the name shown on
+// the approval screen. The chain's allowlist is
+// pokerchain/x/pokerchain/types/game_type.go; this is the client half of it, and
+// it is one table on purpose -- the previous shape (a validator listing 2 and 3,
+// a separate switch for the label, and a <select> in the UI) let Omaha ship in
+// the picker while the background still rejected it.
+export const POKERCHAIN_GAME_TYPES: ReadonlyArray<{
+  readonly id: number;
+  readonly name: string;
+}> = [
+  { id: POKERCHAIN_GAME_TYPE_ZJH, name: "ZhaJinHua (three-card brag)" },
+  { id: POKERCHAIN_GAME_TYPE_TH, name: "Texas Hold'em" },
+  { id: POKERCHAIN_GAME_TYPE_O8, name: "Omaha Hi-Lo" },
+];
+
+export const isSupportedGameType = (gameType: number): boolean =>
+  POKERCHAIN_GAME_TYPES.some((g) => g.id === gameType);
+
+export const gameTypeName = (gameType: number): string =>
+  POKERCHAIN_GAME_TYPES.find((g) => g.id === gameType)?.name ??
+  `game type ${gameType}`;
+
+export const supportedGameTypeList = (): string =>
+  POKERCHAIN_GAME_TYPES.map((g) => `${g.id} (${g.name})`).join(", ");
 
 export function encodeMsgOpenGameIntent(msg: {
   creator: string;

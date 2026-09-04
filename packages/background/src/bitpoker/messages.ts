@@ -1,5 +1,6 @@
 import { Message } from "@keplr-wallet/router";
 import { ROUTE } from "./constants";
+import { isSupportedGameType, supportedGameTypeList } from "./proto-writer";
 import { BitpokerService } from "./service";
 
 export class BitpokerGetKeyMsg extends Message<{
@@ -151,7 +152,7 @@ export class BitpokerOpenIntentMsg extends Message<{
 
   constructor(
     public readonly chainId: string,
-    // pokerchain GameType enum: 2=ZJH, 3=TH.
+    // pokerchain GameType enum; the supported set is POKERCHAIN_GAME_TYPES.
     public readonly gameType: number,
     public readonly minStake: string,
     public readonly maxStake: string,
@@ -168,8 +169,8 @@ export class BitpokerOpenIntentMsg extends Message<{
     if (!this.chainId) {
       throw new Error("chain id is empty");
     }
-    if (this.gameType !== 2 && this.gameType !== 3) {
-      throw new Error("game type must be 2 (ZJH) or 3 (TH)");
+    if (!isSupportedGameType(this.gameType)) {
+      throw new Error(`game type must be one of ${supportedGameTypeList()}`);
     }
     if (!/^[0-9]+$/.test(this.minStake) || !/^[0-9]+$/.test(this.maxStake)) {
       throw new Error("stakes must be decimal integers");

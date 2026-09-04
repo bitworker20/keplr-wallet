@@ -5,7 +5,7 @@ import { Stack } from "../../../components/stack";
 import { HeaderLayout } from "../../../layouts/header";
 import { useStore } from "../../../stores";
 import { useInteractionInfo } from "../../../hooks";
-import { InteractionWaitingData } from "@keplr-wallet/background";
+import { InteractionWaitingData, gameTypeName } from "@keplr-wallet/background";
 import { Box } from "../../../components/box";
 import { Body2, Subtitle3 } from "../../../components/typography";
 import { ColorPalette } from "../../../styles";
@@ -42,16 +42,11 @@ const formatChip = (uchip: string): string => {
   return fraction.length === 0 ? `${whole} CHIP` : `${whole}.${fraction} CHIP`;
 };
 
-const gameName = (gameType: number): string => {
-  switch (gameType) {
-    case 2:
-      return "ZhaJinHua (three-card brag)";
-    case 3:
-      return "Texas Hold'em";
-    default:
-      return `game type ${gameType}`;
-  }
-};
+// The approval screen names the game from the SAME table the background
+// validates against (proto-writer.ts), so a game the extension will happily
+// broadcast can never show up here as a bare "game type 4" -- this dialog is
+// the last thing a player reads before locking funds.
+const gameName = gameTypeName;
 
 interface IntentData {
   chainId: string;
