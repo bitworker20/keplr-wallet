@@ -1,6 +1,7 @@
 import {
   ChainGameIntent,
   chainGameTypeId,
+  chainGameTypeName,
   intentExpired,
   joinableIntents,
   localGameName,
@@ -113,5 +114,12 @@ describe("chain game type mapping", () => {
     expect(localGameName("GAME_TYPE_CC")).toBeUndefined();
     expect(localGameName("1")).toBeUndefined();
     expect(localGameName("GAME_TYPE_UNSPECIFIED")).toBeUndefined();
+  });
+
+  it("labels approval-dialog game types without falling back to another game", () => {
+    expect(chainGameTypeName(2)).toBe("ZhaJinHua");
+    expect(chainGameTypeName(3)).toBe("Texas Hold'em");
+    expect(chainGameTypeName(4)).toBe("Omaha Hi-Lo");
+    expect(chainGameTypeName(99)).toBe("unknown game (type 99)");
   });
 });
