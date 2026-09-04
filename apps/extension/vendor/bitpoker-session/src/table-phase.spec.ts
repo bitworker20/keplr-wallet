@@ -23,6 +23,22 @@ const thTable = (over: Partial<TableState> = {}): TableState => ({
   ...over,
 });
 
+// Omaha's felt behaves like Hold'em except that a seat is waiting for FOUR
+// hole cards, not two.
+const o8Table = (over: Partial<TableState> = {}): TableState => ({
+  ready: true,
+  game: "O8",
+  phase: 0,
+  pot: 30000,
+  dealing: false,
+  settled: false,
+  handNumber: 1,
+  handsPlayed: 0,
+  myHoleCards: [card(0, "AS"), card(1, "KD"), card(2, "7C"), card(3, "2H")],
+  communityCards: [],
+  ...over,
+});
+
 const zjhTable = (over: Partial<TableState> = {}): TableState => ({
   ready: true,
   game: "ZJH",
@@ -194,5 +210,35 @@ describe("deriveTableView", () => {
     );
     // ZJH has no streets to name.
     expect(deriveTableView(snap(zjhTable())).label).toBe("Betting");
+  });
+});
+
+describe("Omaha Hi-Lo", () => {
+  it("is still dealing while only two of the four hole cards have arrived", () => {
+    // Two cards is a complete Hold'em hand and an incomplete Omaha one. Reading
+    // the count with Hold'em's threshold would open the action bar over two
+    // card backs.
+    const partial = o8Table({
+      myHoleCards: [card(0, "AS"), card(1, "KD")],
+    });
+    expect(deriveTablePhase(snap(partial))).toBe("dealing");
+  });
+
+  it("is betting once all four hole cards are dealt", () => {
+    expect(deriveTablePhase(snap(o8Table()))).toBe("betting");
+  });
+
+  it("uses the street name on the felt, like Hold'em and unlike ZJH", () => {
+    const flop = o8Table({
+      phase: 1,
+      communityCards: [card(4, "2D"), card(5, "9S"), card(6, "JH")],
+    });
+    expect(deriveTableView(snap(flop)).label).toBe(
+      deriveTableView(snap(thTable({ phase: 1 }))).label
+    );
+  });
+
+  it("reaches showdown on the phase number, like Hold'em", () => {
+    expect(deriveTablePhase(snap(o8Table({ phase: 4 })))).toBe("showdown");
   });
 });

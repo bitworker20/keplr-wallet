@@ -36,19 +36,30 @@ async function handle(cmd: string, args: any): Promise<any> {
     if (hand) {
       hand.delete();
     }
-    hand =
-      args.game === "ZJH"
-        ? new m.ZhaJinHuaHand(
-            args.firstChips | 0,
-            args.secondChips | 0,
-            args.localSeat | 0
-          )
-        : new m.TexasHoldemHand(
-            args.firstChips | 0,
-            args.secondChips | 0,
-            args.localSeat | 0,
-            args.button | 0
-          );
+    // Switch, not a ternary: adding a game must be a compile-time edit here,
+    // not something that silently falls through to Hold'em and deals the wrong
+    // number of hole cards.
+    if (args.game === "ZJH") {
+      hand = new m.ZhaJinHuaHand(
+        args.firstChips | 0,
+        args.secondChips | 0,
+        args.localSeat | 0
+      );
+    } else if (args.game === "O8") {
+      hand = new m.OmahaHiLoHand(
+        args.firstChips | 0,
+        args.secondChips | 0,
+        args.localSeat | 0,
+        args.button | 0
+      );
+    } else {
+      hand = new m.TexasHoldemHand(
+        args.firstChips | 0,
+        args.secondChips | 0,
+        args.localSeat | 0,
+        args.button | 0
+      );
+    }
     return true;
   }
   // Stateless helpers, answered before the hand guard: a recovery card days

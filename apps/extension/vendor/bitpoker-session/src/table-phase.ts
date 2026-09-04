@@ -21,10 +21,12 @@
 //
 // ZhaJinHua deliberately does not fit the second card rule: a player may bet
 // blind, and their own cards stay undealt until they look. Missing cards there
-// are a legal, playable state, so the rule is Texas Hold'em only.
+// are a legal, playable state, so the rule is for the community-card games
+// only -- and how many cards "dealt" means differs between them (Hold'em two,
+// Omaha four).
 
 import { GameSnapshot } from "./controller";
-import { TableCard, TableState } from "./types";
+import { PokerGame, TableCard, TableState } from "./types";
 
 export type TablePhase =
   // No hand on the table (before matching, or after leaving).
@@ -83,28 +85,31 @@ const STREET_LABEL = [
   "Complete",
 ];
 
-const TH_HOLE_CARDS = 2;
-const TH_SHOWDOWN_PHASE = 4;
+// How many hole cards a seat is waiting for before it can read its own hand.
+// Omaha deals four; treating it as two would call the table "ready" while two
+// of the player's cards were still face down.
+const HOLE_CARDS: Partial<Record<PokerGame, number>> = { TH: 2, O8: 4 };
+const SHOWDOWN_PHASE = 4;
 
 function dealt(cards?: TableCard[]): number {
   return cards?.length ?? 0;
 }
 
-// True once this seat can read its own hand. Texas Hold'em deals two hole
-// cards up front; ZhaJinHua deals nothing until the player looks, so it has
-// nothing to wait for.
+// True once this seat can read its own hand. The community-card games deal the
+// whole hole up front; ZhaJinHua deals nothing until the player looks, so it
+// has nothing to wait for.
 function cardsReadable(t: TableState): boolean {
   if (t.game === "ZJH") {
     return true;
   }
-  return dealt(t.myHoleCards) >= TH_HOLE_CARDS;
+  return dealt(t.myHoleCards) >= (HOLE_CARDS[t.game ?? "TH"] ?? 2);
 }
 
 function inShowdown(t: TableState): boolean {
   if (t.game === "ZJH") {
     return t.showdownComplete === true;
   }
-  return (t.phase ?? 0) >= TH_SHOWDOWN_PHASE;
+  return (t.phase ?? 0) >= SHOWDOWN_PHASE;
 }
 
 export function deriveTablePhase(snapshot: GameSnapshot): TablePhase {

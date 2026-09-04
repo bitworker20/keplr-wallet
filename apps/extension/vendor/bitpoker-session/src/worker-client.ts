@@ -1,5 +1,5 @@
 // Page-side promise RPC over the poker Web Worker (see worker.ts).
-import { HandEffect, MatchedResult, TableState } from "./types";
+import { HandEffect, MatchedResult, PokerGame, TableState } from "./types";
 
 interface PendingCall {
   cmd: string;
@@ -47,7 +47,7 @@ export class PokerWorkerClient {
   selfTest(): Promise<string> {
     return this.call("selfTest");
   }
-  newHand(game: "TH" | "ZJH" = "TH"): Promise<boolean> {
+  newHand(game: PokerGame = "TH"): Promise<boolean> {
     // Chips/seat are overridden by the matchmaking result.
     return this.call("newHand", {
       game,

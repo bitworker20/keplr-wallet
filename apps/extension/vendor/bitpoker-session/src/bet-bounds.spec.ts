@@ -188,3 +188,59 @@ describe("computeBetBounds (bet_bounds.hpp port)", () => {
     expect(betActionCost(v, 220)).toBe(180);
   });
 });
+
+// Omaha's sizing is Hold'em's: no-limit, same min-raise floor, same pot
+// presets. Four hole cards change the showdown, not the betting. Pinned as an
+// equality so a future "special case for O8" has to be a deliberate edit.
+describe("Omaha Hi-Lo bet bounds", () => {
+  const cases: ReadonlyArray<Partial<BetView>> = [
+    {
+      pot: 240,
+      toCall: 40,
+      currentBet: 80,
+      lastRaiseSize: 40,
+      bigBlind: 20,
+      myCommitted: 40,
+      myStack: 960,
+      oppCommitted: 80,
+      oppStack: 920,
+    },
+    {
+      pot: 60,
+      toCall: 0,
+      currentBet: 0,
+      bigBlind: 20,
+      myCommitted: 0,
+      myStack: 500,
+      oppCommitted: 0,
+      oppStack: 120,
+    },
+    {
+      pot: 60,
+      toCall: 0,
+      currentBet: 0,
+      bigBlind: 20,
+      myCommitted: 0,
+      myStack: 0,
+      oppCommitted: 0,
+      oppStack: 500,
+    },
+  ];
+
+  it("matches Texas Hold'em field for field", () => {
+    for (const over of cases) {
+      const th = computeBetBounds(thView(over));
+      const o8 = computeBetBounds(thView({ ...over, game: "O8" }));
+      expect(o8).toEqual(th);
+    }
+  });
+
+  it("prices an action the same way", () => {
+    const over = cases[0];
+    for (const amount of [80, 120, 240, 1000]) {
+      expect(betActionCost(thView({ ...over, game: "O8" }), amount)).toBe(
+        betActionCost(thView(over), amount)
+      );
+    }
+  });
+});

@@ -1,5 +1,6 @@
 import {
   ChainGameIntent,
+  chainGameTypeId,
   intentExpired,
   joinableIntents,
   localGameName,
@@ -84,5 +85,33 @@ describe("lobby filtering", () => {
     expect(localGameName("GAME_TYPE_TH")).toBe("TH");
     expect(localGameName("GAME_TYPE_ZJH")).toBe("ZJH");
     expect(localGameName("GAME_TYPE_CC")).toBeUndefined();
+  });
+});
+
+// The chain enum and the local game name have to agree in BOTH directions: the
+// lobby filters on one and the intent it opens carries the other, so a
+// half-added game shows up as "joinable" and then seats the player in a
+// different game.
+describe("chain game type mapping", () => {
+  const cases: ReadonlyArray<[string, string, "TH" | "ZJH" | "O8", number]> = [
+    ["GAME_TYPE_ZJH", "2", "ZJH", 2],
+    ["GAME_TYPE_TH", "3", "TH", 3],
+    ["GAME_TYPE_O8", "4", "O8", 4],
+  ];
+
+  it("maps every playable type by name and by number", () => {
+    for (const [name, id, local, num] of cases) {
+      expect(localGameName(name)).toBe(local);
+      expect(localGameName(id)).toBe(local);
+      expect(chainGameTypeId(local)).toBe(num);
+    }
+  });
+
+  it("leaves a type this client cannot deal unmapped", () => {
+    // CC has no engine; the chain rejects it too. An unmapped type is what
+    // keeps such an intent out of the lobby list.
+    expect(localGameName("GAME_TYPE_CC")).toBeUndefined();
+    expect(localGameName("1")).toBeUndefined();
+    expect(localGameName("GAME_TYPE_UNSPECIFIED")).toBeUndefined();
   });
 });

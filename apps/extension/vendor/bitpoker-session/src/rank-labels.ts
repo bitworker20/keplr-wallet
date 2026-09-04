@@ -9,6 +9,8 @@
 // Unknown tags come back title-cased rather than dropped: a rank the gamecore
 // gains before this table does should still read as something.
 
+import { PokerGame } from "./types";
+
 const TEXAS_HOLDEM: Record<string, string> = {
   HIGH_CARD: "High card",
   ONE_PAIR: "One pair",
@@ -46,12 +48,29 @@ function titleCase(tag: string): string {
   );
 }
 
-export function handRankLabel(tag: string, game?: "TH" | "ZJH"): string {
+export function handRankLabel(tag: string, game?: PokerGame): string {
   if (tag === "") {
     return "";
   }
+  // Omaha ranks its high half with the same categories as Hold'em (its low
+  // half is not a HandRank at all -- see lowHandLabel).
   const table = game === "ZJH" ? ZHAJINHUA : TEXAS_HOLDEM;
   return table[tag] ?? titleCase(tag);
+}
+
+// Omaha Hi-Lo's low half. The engine emits "LOW_8_6_4_3_A": the five low card
+// ranks, highest first, ace as A. Rendered as "8-6-4-3-A low", the way the
+// hand is actually named at a table. An empty tag means no qualifying low,
+// and comes back as the empty string so a caller can test it directly.
+export function lowHandLabel(tag: string): string {
+  if (tag === "") {
+    return "";
+  }
+  const parts = tag.split("_");
+  if (parts[0] !== "LOW" || parts.length < 2) {
+    return titleCase(tag);
+  }
+  return parts.slice(1).join("-") + " low";
 }
 
 // Move-log verbs for the action tags the gamecore reports. Amounts are the

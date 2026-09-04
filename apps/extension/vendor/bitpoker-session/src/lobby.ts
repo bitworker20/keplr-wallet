@@ -2,11 +2,13 @@
 // from the pokerchain LCD as JSON (no protobuf involved). Pure functions so
 // the filtering rules are unit-testable; the React side only renders.
 
+import { PokerGame } from "./types";
+
 export interface ChainGameIntent {
   intent_id: string;
   creator: string;
   opponent: string;
-  // Proto3 JSON enum name, e.g. "GAME_TYPE_TH" | "GAME_TYPE_ZJH".
+  // Proto3 JSON enum name, e.g. "GAME_TYPE_TH" | "GAME_TYPE_ZJH" | "GAME_TYPE_O8".
   game_type: string;
   // uchip, uint64-as-string.
   min_stake: string;
@@ -20,14 +22,34 @@ export interface ChainGameIntent {
 }
 
 // "GAME_TYPE_TH" -> "TH" (local game name used by the controller/worker).
-export function localGameName(chainGameType: string): "TH" | "ZJH" | undefined {
-  if (chainGameType === "GAME_TYPE_TH" || chainGameType === "3") {
-    return "TH";
-  }
-  if (chainGameType === "GAME_TYPE_ZJH" || chainGameType === "2") {
-    return "ZJH";
+// Unknown or unplayable types come back undefined, which is what keeps an
+// intent this client cannot actually deal out of the lobby list.
+const CHAIN_GAME_TYPES: ReadonlyArray<
+  readonly [name: string, id: string, local: PokerGame]
+> = [
+  ["GAME_TYPE_ZJH", "2", "ZJH"],
+  ["GAME_TYPE_TH", "3", "TH"],
+  ["GAME_TYPE_O8", "4", "O8"],
+];
+
+export function localGameName(chainGameType: string): PokerGame | undefined {
+  for (const [name, id, local] of CHAIN_GAME_TYPES) {
+    if (chainGameType === name || chainGameType === id) {
+      return local;
+    }
   }
   return undefined;
+}
+
+// The other direction: the enum NUMBER a MsgOpenGameIntent carries. The chain
+// parses these as integers, so this is the value that goes on the wire.
+export function chainGameTypeId(game: PokerGame): number {
+  for (const [, id, local] of CHAIN_GAME_TYPES) {
+    if (local === game) {
+      return Number(id);
+    }
+  }
+  throw new Error(`unknown game ${game}`);
 }
 
 // GameIntentStatus.GAME_INTENT_STATUS_PENDING. Sent as the NUMBER, not the

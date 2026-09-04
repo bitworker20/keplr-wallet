@@ -20,7 +20,7 @@ import {
   generateTransportKeypair,
   openEndpointBlob,
 } from "./endpoint-blob";
-import { isPendingIntent } from "./lobby";
+import { chainGameTypeId, isPendingIntent } from "./lobby";
 import {
   forgetSessionIdentity,
   rememberSessionIdentity,
@@ -36,6 +36,7 @@ import {
   MatchedResult,
   PokerActionKind,
   TableState,
+  PokerGame,
 } from "./types";
 import { SettlementReport, buildSettlementReport } from "./settlement-report";
 import {
@@ -84,7 +85,9 @@ const ZJH_ACTION_LABELS = [
 // each append.
 const MAX_ACTION_LOG = 60;
 
-export type PokerGame = "TH" | "ZJH";
+// Re-exported: the type itself lives in types.ts so the lobby can use it
+// without importing this module back.
+export type { PokerGame } from "./types";
 
 export interface JoinOptions {
   relayUrl: string;
@@ -405,8 +408,10 @@ export class PokerGameController {
       await this.cancelStrandedIntents(lcd, opts.chainId, address);
 
       const intentTx = await this.wallet.openIntent(opts.chainId, {
-        // GameType: TH=3, ZJH=2 (pokerchain enum).
-        gameType: this.game === "ZJH" ? 2 : 3,
+        // The pokerchain GameType enum number for this game (lobby.ts owns
+        // the mapping, in both directions, so the lobby filter and the intent
+        // it creates can never name different games).
+        gameType: chainGameTypeId(this.game),
         minStake,
         maxStake,
         opponent,

@@ -64,12 +64,27 @@ export interface HandResult {
   oppBestCards: TableCard[];
   // The opponent's revealed cards; empty when they folded uncalled.
   oppCards: TableCard[];
+  // Omaha Hi-Lo's second half. The fields above always describe the HIGH hand;
+  // these describe the qualifying 8-or-better low, and are empty for a game
+  // with no low half (TH, ZJH) or a seat that made none -- which is also how
+  // the UI decides whether to draw a second row.
+  myLowRank?: string;
+  oppLowRank?: string;
+  myLowCards?: TableCard[];
+  oppLowCards?: TableCard[];
 }
+
+// The games this client can actually deal. Lives here rather than in
+// controller.ts because the lobby needs it too, and controller.ts imports the
+// lobby.
+export type PokerGame = "TH" | "ZJH" | "O8";
 
 export interface TableState {
   ready: boolean;
-  game?: "TH" | "ZJH";
-  phase?: number; // TH: 0=Preflop 1=Flop 2=Turn 3=River 4=Showdown 5=Complete
+  game?: PokerGame;
+  // Community-card games (TH, O8): 0=Preflop 1=Flop 2=Turn 3=River 4=Showdown
+  // 5=Complete.
+  phase?: number;
   pot?: number;
   currentBet?: number;
   smallBlind?: number;

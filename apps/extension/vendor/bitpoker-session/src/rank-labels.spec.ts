@@ -4,6 +4,7 @@ import {
   actionTakesAmount,
   handRankLabel,
   hasActionLabels,
+  lowHandLabel,
 } from "./rank-labels";
 
 describe("handRankLabel", () => {
@@ -86,5 +87,26 @@ describe("actionLabel", () => {
     for (const tag of ["FOLD", "CHECK", "ALLIN", "LOOK", "COMPARE"]) {
       expect(actionTakesAmount(tag)).toBe(false);
     }
+  });
+});
+
+describe("lowHandLabel", () => {
+  it("names an Omaha low the way a table does", () => {
+    expect(lowHandLabel("LOW_8_6_4_3_A")).toBe("8-6-4-3-A low");
+    expect(lowHandLabel("LOW_5_4_3_2_A")).toBe("5-4-3-2-A low");
+  });
+
+  it("renders no low as the empty string", () => {
+    // The engine emits "" for a seat with no qualifying low, and the UI tests
+    // that emptiness to decide whether to draw a second row at all.
+    expect(lowHandLabel("")).toBe("");
+  });
+
+  it("falls back rather than dropping an unrecognised tag", () => {
+    expect(lowHandLabel("SOMETHING_ELSE")).toBe("Something else");
+  });
+
+  it("ranks an Omaha high hand with the Hold'em categories", () => {
+    expect(handRankLabel("FULL_HOUSE", "O8")).toBe("Full house");
   });
 });

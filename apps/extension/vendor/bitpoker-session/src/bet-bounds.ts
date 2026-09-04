@@ -4,14 +4,18 @@
 // and the same cases are ported to bet-bounds.spec.ts here).
 //
 // Conventions (mirroring the engines):
-//   - TH with currentBet == 0: amount is CHIPS TO ADD this action (a Bet).
-//   - TH with currentBet  > 0: amount is the RAISE-TO street total (RaiseTo).
+//   - A community-card game (TH, O8) with currentBet == 0: amount is CHIPS TO
+//     ADD this action (a Bet). Omaha's betting is the same no-limit language
+//     Hold'em uses -- four hole cards change the showdown, not the sizing.
+//   - The same with currentBet > 0: amount is the RAISE-TO street total.
 //   - ZJH: amount is the DARK-BET LEVEL; the chips actually paid are
 //     level x multiplier (x2 once the actor has looked), capped by what the
 //     seat may still commit (see zhajinhuaCommittable).
 
+import { PokerGame } from "./types";
+
 export interface BetView {
-  game: "TH" | "ZJH";
+  game: PokerGame;
   pot: number;
   toCall: number;
   currentBet: number;
