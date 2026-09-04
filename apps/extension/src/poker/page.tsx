@@ -315,6 +315,7 @@ export const PokerPage: React.FC<PokerPageProps> = ({ wallet, chainId }) => {
           >
             <option value="TH">Texas Hold&apos;em</option>
             <option value="ZJH">ZhaJinHua (三张)</option>
+            <option value="O8">Omaha Hi-Lo (奥马哈高低分)</option>
           </select>
         </div>
         {field("relayUrl", "relay url", "22rem")}
