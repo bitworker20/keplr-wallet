@@ -83,6 +83,7 @@ export const CreateGameForm: React.FC<{
         >
           <option value="TH">Texas Hold&apos;em</option>
           <option value="ZJH">ZhaJinHua (三张)</option>
+          <option value="O8">Omaha Hi-Lo (奥马哈高低分)</option>
         </select>
       </div>
       <div style={styles.row}>

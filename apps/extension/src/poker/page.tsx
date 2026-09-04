@@ -39,7 +39,7 @@ import {
 } from "@bitpoker/poker-session/lobby";
 import { formatChip } from "@bitpoker/poker-session/chip";
 import { styles } from "./ui/styles";
-import { ThTable } from "./ui/th-table";
+import { CommunityTable } from "./ui/community-table";
 import { ZjhTable } from "./ui/zjh-table";
 import { Diagnostics } from "./ui/diagnostics";
 import { Lobby } from "./ui/lobby";
@@ -295,7 +295,7 @@ export const PokerPage: React.FC<PokerPageProps> = ({ wallet, chainId }) => {
       </div>
 
       {t?.ready && isZjh ? <ZjhTable t={t} {...tableProps} /> : null}
-      {t?.ready && !isZjh ? <ThTable t={t} {...tableProps} /> : null}
+      {t?.ready && !isZjh ? <CommunityTable t={t} {...tableProps} /> : null}
 
       {/* Dev flows: relay-direct play (unsigned-dev auth, a session id the two
           players share by hand) and the legacy single-stake chain quick start

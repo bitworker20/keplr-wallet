@@ -1,6 +1,6 @@
 # Which gamecore sources the committed gamecore.wasm was built from.
 # Written by tools/wasm-stamp.sh --write; verified by --check (make wasm-check).
-# artifact gamecore.wasm af12eb47b64946669866b36a3e9edff208ae9c924123737bdf0e3e666b4f44e2
+# artifact gamecore.wasm 4bd76bbc0e95686f140984a9766720358abbf9ef44aefe7deddc512df2ae1342
 0e28b87efdae618a66517f8655c49168c9c98725face9b1256cf46e53f2f65f0  bitpoker/include/common/game_message.hpp
 4343e2f0e927df4fec10d4ab0448e6ae3c19ddfd56750f6e523c23d56bae9198  bitpoker/include/common/game_message_types.hpp
 dc15fdc48724568c57f0d1eaed05c984ca68e702f5c57a3626ca4ac0b68c17eb  bitpoker/include/common/protocol_state.hpp
@@ -59,7 +59,7 @@ bcab45fef2e2089b1fc78fccc2d1befd680aae3bf68a4b23831e21391786913f  bitpoker/src/c
 7b330d61e68642eb6484111738348887af60a709bd6c09988297c9adfa6431cd  bitpoker/src/zhajinhua/zhajinhua_state.cpp
 d1b2895aed58734bbe964604ca37245e30e7409e0df7212c5a9c22243126b8a1  bitpoker/wasm/CMakeLists.txt
 908b12c18917332274a69b5a377d913243d2ed2bc1f5596668e2592f7b105efa  bitpoker/wasm/gamecore_codec.hpp
-55b01bfab2db1c6bad25053e545b174ea1a797ff2aff787b4ecf9c4c8130165e  bitpoker/wasm/gamecore_embind.cpp
+decdf9585b0af78ab9b76ad7ab7a9cadee4c9ec022b2ba796a8ada8d7c90e269  bitpoker/wasm/gamecore_embind.cpp
 9eb207a1ce0c2ed327669a4b4cc2b75519313fe8289e8cc3d1a1f85182306bb1  bitpoker/wasm/shim/spdlog/spdlog.h
 14f24536d3cf2e8a25597a9a318016e676ed569e11d98eafdf3522bdf1fbbe02  contrib/fastecc/FourQlib/FourQ_64bit_and_portable/../random/random.h
 f3014f377ad4eaeef0c4af5d55c209fe375e0273c767dc20e0afa810522e000a  contrib/fastecc/FourQlib/FourQ_64bit_and_portable/../sha512/sha512.h

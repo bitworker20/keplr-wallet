@@ -72,6 +72,10 @@ export interface HandResult {
   oppLowRank?: string;
   myLowCards?: TableCard[];
   oppLowCards?: TableCard[];
+  // Who took the low half: 0 (or absent) = nobody qualified, or the lows tied;
+  // 1 = local player, 2 = opponent. Not derivable from the two tags above --
+  // both seats can hold a qualifying low and only one of them wins it.
+  lowWinner?: number;
 }
 
 // The games this client can actually deal. Lives here rather than in

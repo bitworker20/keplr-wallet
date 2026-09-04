@@ -11,6 +11,7 @@ import {
   betActionCost,
   computeBetBounds,
 } from "@bitpoker/poker-session/bet-bounds";
+import { lowHandLabel } from "@bitpoker/poker-session/rank-labels";
 import { Cards, CardBacks } from "./cards";
 import { styles } from "./styles";
 import {
@@ -22,10 +23,15 @@ import {
   turnMark,
 } from "./table-chrome";
 
-// Texas Hold'em table on a felt surface: board + hole cards, seat plates,
-// bounds-validated bet sizing (slider + amount clamped to the engine rules),
-// the auto-hiding hand banner and the persistent session strip.
-export const ThTable: React.FC<{
+// The community-card table on a felt surface, shared by Texas Hold'em and
+// Omaha Hi-Lo: board + hole cards, seat plates, bounds-validated bet sizing
+// (slider + amount clamped to the engine rules), the auto-hiding hand banner
+// and the persistent session strip.
+//
+// The two games differ here only in how many hole cards arrive -- rendered
+// from the array rather than a constant -- and in the low half of the
+// showdown, which the hand banner draws.
+export const CommunityTable: React.FC<{
   t: TableState;
   me: number;
   peer: number;
@@ -55,7 +61,10 @@ export const ThTable: React.FC<{
   const opp = players?.[peer];
 
   const betView: BetView = {
-    game: "TH",
+    // The real game, not a constant: bet-bounds treats the community-card
+    // games identically today, and pinning "TH" here would hide it the day
+    // that stops being true.
+    game: t.game ?? "TH",
     pot: t.pot ?? 0,
     toCall,
     currentBet: t.currentBet ?? 0,
@@ -102,6 +111,16 @@ export const ThTable: React.FC<{
       ? `you ${fmt(mySession)} / opponent ${fmt(oppSession)}`
       : undefined;
   const total = (mySession ?? 0) + (oppSession ?? 0);
+  // Omaha splits the pot, and a player who took only half needs to be told
+  // why. The banner is one line here, so the low half is a suffix rather than
+  // its own block; a seat with no qualifying low is still named, because
+  // "nobody had one" and "the other player had one" are different answers.
+  const result = t.handResult;
+  const lowHalfNote =
+    result && (result.myLowRank || result.oppLowRank)
+      ? ` · low half: you ${lowHandLabel(result.myLowRank ?? "") || "none"}` +
+        `, opponent ${lowHandLabel(result.oppLowRank ?? "") || "none"}`
+      : "";
   const outcome =
     mySession !== undefined && oppSession !== undefined
       ? mySession * 2 > total
@@ -166,7 +185,7 @@ export const ThTable: React.FC<{
         t={t}
         text={`hand ${t.handsPlayed ?? 0} settled${
           standings ? ` — ${standings} (${outcome})` : ""
-        }`}
+        }${lowHalfNote}`}
       />
 
       {stage === "playing" ? (
