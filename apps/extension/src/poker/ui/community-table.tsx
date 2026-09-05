@@ -115,11 +115,17 @@ export const CommunityTable: React.FC<{
   // why. The banner is one line here, so the low half is a suffix rather than
   // its own block; a seat with no qualifying low is still named, because
   // "nobody had one" and "the other player had one" are different answers.
+  // The suffix appears for every hi-lo hand, including the one where neither
+  // seat qualified: "the pot was not split because nobody made a low" is not
+  // the same message as saying nothing at all, which reads as "this game does
+  // not split pots".
   const result = t.handResult;
   const lowHalfNote =
-    result && (result.myLowRank || result.oppLowRank)
-      ? ` · low half: you ${lowHandLabel(result.myLowRank ?? "") || "none"}` +
-        `, opponent ${lowHandLabel(result.oppLowRank ?? "") || "none"}`
+    result && t.game === "O8"
+      ? result.myLowRank || result.oppLowRank
+        ? ` · low half: you ${lowHandLabel(result.myLowRank ?? "") || "none"}` +
+          `, opponent ${lowHandLabel(result.oppLowRank ?? "") || "none"}`
+        : " · low half: nobody qualified, so the high hand takes the whole pot"
       : "";
   const outcome =
     mySession !== undefined && oppSession !== undefined
