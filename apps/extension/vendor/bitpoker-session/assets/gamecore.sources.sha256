@@ -1,6 +1,6 @@
 # Which gamecore sources the committed gamecore.wasm was built from.
 # Written by tools/wasm-stamp.sh --write; verified by --check (make wasm-check).
-# artifact gamecore.wasm 9927e76772aad6a00a1a60aaa3461217038b9c6af037bdcbbfc685c4362a0b1d
+# artifact gamecore.wasm a64e6f68deaf78ab6b959673b43384fd13271e46523eb312ddd25dacc7c604f7
 0e28b87efdae618a66517f8655c49168c9c98725face9b1256cf46e53f2f65f0  bitpoker/include/common/game_message.hpp
 4343e2f0e927df4fec10d4ab0448e6ae3c19ddfd56750f6e523c23d56bae9198  bitpoker/include/common/game_message_types.hpp
 dc15fdc48724568c57f0d1eaed05c984ca68e702f5c57a3626ca4ac0b68c17eb  bitpoker/include/common/protocol_state.hpp
@@ -53,7 +53,7 @@ bcab45fef2e2089b1fc78fccc2d1befd680aae3bf68a4b23831e21391786913f  bitpoker/src/c
 1c4dffff27b360d82ce30fcddd8a316a0149088de0c909c63efe8ded5041be35  bitpoker/src/omaha/omaha_rank.cpp
 66fb4383106c0871d2cdc53cb814fbcd4dc263d5164bab48d21350b86b57492a  bitpoker/src/texasholdem/texasholdem_hand_core.cpp
 67f362672c6f726ca68e9566a8c65720f93200140aad79a908d97b19fde2bce8  bitpoker/src/texasholdem/texasholdem_rank.cpp
-70ae470b20fdf9c253a854d9f971bd6ea74fe730f52ebe33bf30c968c23f99cc  bitpoker/src/texasholdem/texasholdem_state.cpp
+a02b19ddf073236b2b0d1e973f228693834607df68f37536dce0dbb0953a4b1f  bitpoker/src/texasholdem/texasholdem_state.cpp
 9f601a98254ef46307537d1ced829b6e4910747fc28630a490791d40490ac3ea  bitpoker/src/zhajinhua/zhajinhua_hand_core.cpp
 4250797a85708ae76e49b4e96c7d00a08cbc1cc3ae06101057314802c3c4c1b4  bitpoker/src/zhajinhua/zhajinhua_rank.cpp
 7b330d61e68642eb6484111738348887af60a709bd6c09988297c9adfa6431cd  bitpoker/src/zhajinhua/zhajinhua_state.cpp
