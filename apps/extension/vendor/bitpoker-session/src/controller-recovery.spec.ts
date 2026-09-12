@@ -10,12 +10,12 @@
 // jest through the vendored copy, so it stays on plain fakes and never waits
 // on a real clock (the paths asserted here are the zero-delay ones).
 import { PokerGameController } from "./controller";
-import { RelayType } from "./relay-client";
+import { RelayFrame, RelayType } from "./relay-client";
 
 interface FakeRelay {
   closed: boolean;
   sent: Uint8Array[];
-  nextFrame(timeoutMs?: number): Promise<null>;
+  nextFrame(timeoutMs?: number): Promise<RelayFrame | null>;
   close(): void;
   sendStream(frame: Uint8Array): void;
   sendSessionHello(frame: Uint8Array): void;
@@ -23,10 +23,20 @@ interface FakeRelay {
   continueSequenceFrom(sequence: number): void;
 }
 
-const fakeRelay = (onRead: () => void = () => {}): FakeRelay => ({
+// `frames` are returned in order before nextFrame falls back to onRead()+null
+// — resumeTransport now requires a genuine answer from the peer before
+// declaring a reconnect recovered (see controller.ts), so a relay standing in
+// for "the peer is actually still there" needs to be able to hand back one.
+const fakeRelay = (
+  onRead: () => void = () => {},
+  frames: RelayFrame[] = []
+): FakeRelay => ({
   closed: false,
   sent: [],
-  async nextFrame(): Promise<null> {
+  async nextFrame(): Promise<RelayFrame | null> {
+    if (frames.length > 0) {
+      return frames.shift() ?? null;
+    }
     onRead();
     return null;
   },
@@ -115,10 +125,21 @@ describe("pump recovery", () => {
     const dead = fakeRelay();
     let replacement: FakeRelay | undefined;
 
-    // First read finds nothing (the drop). After the reconnect the second read
-    // ends the test rather than looping forever.
+    // First read finds nothing (the drop). resumeTransport's post-reconnect
+    // confirmation read gets this harmless frame back — proof the peer is
+    // still there, ignored either way by handleFrame — and only the read
+    // AFTER that ends the test rather than looping forever.
     controller.armMidHand(dead, (from) => {
-      replacement = fakeRelay(() => controller.stop());
+      replacement = fakeRelay(
+        () => controller.stop(),
+        [
+          {
+            type: RelayType.ChatMessage,
+            requestId: 0,
+            payload: new Uint8Array(),
+          },
+        ]
+      );
       replacement.continueSequenceFrom(from);
       return replacement;
     });
@@ -177,6 +198,26 @@ describe("pump recovery", () => {
 
     expect(controller.disputed).toEqual([]);
     expect(controller.failed).toEqual([]);
+  });
+
+  // The relay is always reachable, so a websocket reconnect "succeeding"
+  // proves nothing about whether the PEER is still there. Before
+  // resumeTransport required an actual answer, every attempt looked
+  // recovered and pump() went back to waiting out another full silence
+  // budget — for a peer that had genuinely quit, forever. It must instead
+  // give up after RESUME_ATTEMPTS and escalate, the same as a reconnect
+  // that fails outright.
+  it("escalates once reconnect attempts are exhausted if the peer never answers, instead of looping forever", async () => {
+    const controller = new TestController();
+    const dead = fakeRelay();
+
+    controller.armMidHand(dead, () => fakeRelay());
+
+    await controller.runPump();
+
+    expect(controller.disputed).toHaveLength(1);
+    expect(controller.failed).toEqual([]);
+    expect(controller.reconnectCalls).toHaveLength(3);
   });
 });
 
@@ -265,7 +306,9 @@ class DisputeWatchController extends PokerGameController {
   }
 }
 
-const stubFetch = (impl: () => Promise<{ ok: boolean; json(): Promise<any> }>) => {
+const stubFetch = (
+  impl: () => Promise<{ ok: boolean; json(): Promise<any> }>
+) => {
   (global as any).fetch = impl;
 };
 

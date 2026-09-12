@@ -10,6 +10,7 @@ import {
   PEER_SILENCE_MS,
   RESUME_ATTEMPTS,
   RESUME_BACKOFF_MS,
+  RESUME_CONFIRM_TIMEOUT_MS,
   RESUME_CONNECT_TIMEOUT_MS,
   peerSilenceCoversBothSeats,
   resumeDelayMs,
@@ -59,10 +60,16 @@ describe("session timing policy", () => {
   it("does not delay the first attempt", () => {
     // A relay that bounced is often already back; making the player wait a
     // second to find that out is pure latency on the common recovery.
-    expect(totalResumeBudgetMs(1)).toBe(RESUME_CONNECT_TIMEOUT_MS);
-    expect(totalResumeBudgetMs(2)).toBe(
-      RESUME_CONNECT_TIMEOUT_MS * 2 + resumeDelayMs(1)
-    );
+    const perAttempt = RESUME_CONNECT_TIMEOUT_MS + RESUME_CONFIRM_TIMEOUT_MS;
+    expect(totalResumeBudgetMs(1)).toBe(perAttempt);
+    expect(totalResumeBudgetMs(2)).toBe(perAttempt * 2 + resumeDelayMs(1));
+  });
+
+  it("confirms the peer answered quickly rather than tolerating a full thinking turn", () => {
+    // The regression this constant exists for: reusing PEER_SILENCE_MS per
+    // attempt let 3 attempts push the worst case past 10 minutes while the
+    // relay stayed reachable throughout — see session-timing.ts.
+    expect(RESUME_CONFIRM_TIMEOUT_MS).toBeLessThan(PEER_SILENCE_MS);
   });
 
   it("finishes reconnecting before the peer's silence budget expires", () => {

@@ -44,6 +44,20 @@ export const RESUME_BACKOFF_MS = 1_000;
 // nor a way out, so each attempt is bounded.
 export const RESUME_CONNECT_TIMEOUT_MS = 10_000;
 
+// After reconnecting, how long to wait for the PEER to actually answer (its
+// own resync frame, or it had simply already resumed play) before treating
+// this attempt as failed. Deliberately much shorter than PEER_SILENCE_MS:
+// that budget accommodates a live opponent still thinking about a move, but a
+// resync ack is not a decision — a peer that is still there answers near
+// instantly, so a long wait here only stalls the one thing this budget is
+// meant to detect quickly (a peer that is truly gone). Getting this wrong in
+// the other direction — reusing PEER_SILENCE_MS per attempt — is exactly the
+// bug this guards against: 3 attempts at 150s each pushed the worst case to
+// escalate past 10 minutes, twice the peer's own silence budget, while the
+// relay stayed reachable the whole time and made every attempt look like it
+// might still succeed.
+export const RESUME_CONFIRM_TIMEOUT_MS = 15_000;
+
 // How long to wait after the Nth failed attempt before the next one: linear,
 // counted from 1 (so 1s, 2s, 3s). The FIRST attempt is not delayed — the
 // common case is a relay that bounced and is already back — so a run of n
@@ -64,7 +78,7 @@ export function totalResumeBudgetMs(
     if (attempt > 1) {
       total += resumeDelayMs(attempt - 1);
     }
-    total += RESUME_CONNECT_TIMEOUT_MS;
+    total += RESUME_CONNECT_TIMEOUT_MS + RESUME_CONFIRM_TIMEOUT_MS;
   }
   return total;
 }

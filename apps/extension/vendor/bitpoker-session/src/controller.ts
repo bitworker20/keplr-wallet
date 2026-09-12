@@ -11,6 +11,7 @@ import { PokerWalletBridge } from "./wallet-bridge";
 import {
   buildHelloSigningPayload,
   RelayClient,
+  RelayFrame,
   RelayType,
 } from "./relay-client";
 import {
@@ -43,6 +44,7 @@ import {
   ACTION_TIMEOUT_MS,
   PEER_SILENCE_MS,
   RESUME_ATTEMPTS,
+  RESUME_CONFIRM_TIMEOUT_MS,
   RESUME_CONNECT_TIMEOUT_MS,
   resumeDelayMs,
 } from "./session-timing";
@@ -766,50 +768,63 @@ export class PokerGameController {
         return;
       }
 
-      if (frame.type === RelayType.SessionHello && !this.matched) {
-        const matched = await this.worker.onPeerSessionHello(frame.payload);
-        if (matched.error) {
-          this.fail(`match failed: ${matched.error}`);
-          return;
-        }
-        this.matched = matched;
-        // The relay replays hellos to late joiners, but re-send ours so the
-        // exchange is join-order agnostic even against older relays. The
-        // hello is idempotent; peers ignore a duplicate mid-hand.
-        if (this.sessionHello) {
-          this.relay.sendSessionHello(this.sessionHello);
-        }
-        this.emit({
-          stage: "playing",
-          matched,
-          // The stake stays OUT of this string: it is in the engine's own
-          // unit (uchip), and this controller has no business deciding how
-          // money is displayed. The UI renders snapshot.matched.betAmount
-          // through its own formatter — "bet 1000000" next to a felt reading
-          // "1 CHIP" is the same number twice in two units.
-          message: `matched: ${matched.firstName} vs ${matched.secondName}`,
-        });
-        await this.applyEffect(await this.worker.start());
-        await this.refresh();
-        continue;
+      if (!(await this.handleFrame(frame))) {
+        return;
       }
-      if (frame.type === RelayType.StreamData && this.matched) {
-        await this.applyEffect(await this.worker.onPeerFrame(frame.payload));
-        await this.refresh();
-        // Frame pacing: hold each rendered peer move on screen for a beat so
-        // fast opponents (native robots settle a street in milliseconds) stay
-        // followable. Safe against the 30s disconnect detector: relay-client
-        // buffers inbound frames in an awaitable queue, so nextFrame's timer
-        // measures real peer silence, not our UI hold. Shuffle/key-exchange
-        // bursts (dealing) are not paced — nothing visible changes per frame.
-        const table = this.snapshot.table;
-        if (table?.ready && !table.dealing && this.snapshot.wait === 1) {
-          await this.hold(PokerGameController.PEER_FRAME_HOLD_MS);
-        }
-        continue;
-      }
-      // Settlement/Chat/duplicate hellos are not the hand's concern.
     }
+  }
+
+  // Applies one already-received relay frame. Shared by pump()'s ordinary
+  // loop and resumeTransport()'s post-reconnect confirmation wait, so a
+  // resync frame (or anything else) the peer sends back while this seat is
+  // recovering a dropped link is handled exactly like it would be in normal
+  // play, never silently dropped. Returns false when the frame ended the
+  // session (a hello mismatch already called fail()).
+  protected async handleFrame(frame: RelayFrame): Promise<boolean> {
+    if (frame.type === RelayType.SessionHello && !this.matched) {
+      const matched = await this.worker.onPeerSessionHello(frame.payload);
+      if (matched.error) {
+        this.fail(`match failed: ${matched.error}`);
+        return false;
+      }
+      this.matched = matched;
+      // The relay replays hellos to late joiners, but re-send ours so the
+      // exchange is join-order agnostic even against older relays. The
+      // hello is idempotent; peers ignore a duplicate mid-hand.
+      if (this.sessionHello) {
+        this.relay?.sendSessionHello(this.sessionHello);
+      }
+      this.emit({
+        stage: "playing",
+        matched,
+        // The stake stays OUT of this string: it is in the engine's own
+        // unit (uchip), and this controller has no business deciding how
+        // money is displayed. The UI renders snapshot.matched.betAmount
+        // through its own formatter — "bet 1000000" next to a felt reading
+        // "1 CHIP" is the same number twice in two units.
+        message: `matched: ${matched.firstName} vs ${matched.secondName}`,
+      });
+      await this.applyEffect(await this.worker.start());
+      await this.refresh();
+      return true;
+    }
+    if (frame.type === RelayType.StreamData && this.matched) {
+      await this.applyEffect(await this.worker.onPeerFrame(frame.payload));
+      await this.refresh();
+      // Frame pacing: hold each rendered peer move on screen for a beat so
+      // fast opponents (native robots settle a street in milliseconds) stay
+      // followable. Safe against the 30s disconnect detector: relay-client
+      // buffers inbound frames in an awaitable queue, so nextFrame's timer
+      // measures real peer silence, not our UI hold. Shuffle/key-exchange
+      // bursts (dealing) are not paced — nothing visible changes per frame.
+      const table = this.snapshot.table;
+      if (table?.ready && !table.dealing && this.snapshot.wait === 1) {
+        await this.hold(PokerGameController.PEER_FRAME_HOLD_MS);
+      }
+      return true;
+    }
+    // Settlement/Chat/duplicate hellos are not the hand's concern.
+    return true;
   }
 
   protected static readonly PEER_FRAME_HOLD_MS = 850;
@@ -867,11 +882,37 @@ export class PokerGameController {
         this.relay?.close();
         this.relay = relay;
         relay.sendStream(await this.worker.makeResyncFrame());
-        this.emit({
-          resuming: false,
-          message: "reconnected — replaying the hand with the opponent…",
-        });
-        return true;
+        // The websocket reconnecting proves nothing about the PEER — the
+        // relay answers a fresh connection whether or not the opponent's
+        // process is even still running. Wait for it to actually answer
+        // before calling this recovered. RESUME_CONFIRM_TIMEOUT_MS, not
+        // PEER_SILENCE_MS: a resync ack is not a decision, so a peer that is
+        // still there answers near instantly, and reusing the full
+        // thinking-time budget here across RESUME_ATTEMPTS tries pushed the
+        // worst case to escalate past 10 minutes — see session-timing.ts.
+        // Skipping this wait entirely is the bug this guards against: a peer
+        // that had genuinely quit kept this seat cycling between "gone
+        // quiet" and "reconnected" forever, since the relay itself never
+        // stopped answering — see game_session.cpp's resyncAfterReconnect
+        // for the native side of this same requirement.
+        const answer = await relay.nextFrame(RESUME_CONFIRM_TIMEOUT_MS);
+        if (answer) {
+          // Whatever it is — the peer's own resync frame, or it had already
+          // resumed play — handleFrame knows what to do with it, the same
+          // as pump()'s ordinary loop would; nothing is lost by consuming
+          // it here instead of there.
+          if (!(await this.handleFrame(answer))) {
+            return false;
+          }
+          this.emit({
+            resuming: false,
+            message: "reconnected — replaying the hand with the opponent…",
+          });
+          return true;
+        }
+        console.warn(
+          `relay resume attempt ${attempt}: peer never answered the resync`
+        );
       } catch (e: any) {
         console.warn(
           `relay resume attempt ${attempt} failed: ${e?.message ?? e}`
