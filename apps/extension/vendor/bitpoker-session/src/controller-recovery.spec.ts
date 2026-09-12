@@ -230,3 +230,125 @@ describe("relay frame types", () => {
     expect(RelayType.SessionResume).toBe(9);
   });
 });
+
+// The peer can force this session to DISPUTED and reveal its own secret
+// entirely through chain transactions the relay link never sees — pump()'s
+// escalation above only fires on a dead transport, so a player who is not
+// watching the chain would never answer and would be judged
+// FORFEIT_NO_SUBMISSION for the whole escrow (ONCHAIN_ROADMAP.md §13.5).
+// These drive checkForUnilateralDispute directly against a stubbed `fetch`.
+class DisputeWatchController extends PokerGameController {
+  answered = 0;
+
+  constructor() {
+    super(() => {}, {} as any, fakeWorker());
+  }
+
+  protected override async respondToUnilateralDispute(): Promise<void> {
+    this.answered += 1;
+    this.disputeHandled = true;
+    this.running = false;
+  }
+
+  arm(sessionId: string): void {
+    this.chainSession = { session_id: sessionId };
+    this.chainLcdUrl = "http://lcd.test";
+    this.running = true;
+  }
+
+  stop(): void {
+    this.running = false;
+  }
+
+  check(): Promise<void> {
+    return this.checkForUnilateralDispute();
+  }
+}
+
+const stubFetch = (impl: () => Promise<{ ok: boolean; json(): Promise<any> }>) => {
+  (global as any).fetch = impl;
+};
+
+describe("unilateral dispute watch", () => {
+  const originalFetch = (global as any).fetch;
+
+  afterEach(() => {
+    (global as any).fetch = originalFetch;
+  });
+
+  it("answers once the chain reports this session as DISPUTED", async () => {
+    const controller = new DisputeWatchController();
+    controller.arm("7");
+    stubFetch(async () => ({
+      ok: true,
+      json: async () => ({
+        session: { status: "GAME_SESSION_STATE_DISPUTED" },
+      }),
+    }));
+
+    await controller.check();
+
+    expect(controller.answered).toBe(1);
+  });
+
+  it("does nothing while the session is still active", async () => {
+    const controller = new DisputeWatchController();
+    controller.arm("7");
+    stubFetch(async () => ({
+      ok: true,
+      json: async () => ({ session: { status: "GAME_SESSION_STATE_ACTIVE" } }),
+    }));
+
+    await controller.check();
+
+    expect(controller.answered).toBe(0);
+  });
+
+  it("does not escalate on a transient LCD failure", async () => {
+    const controller = new DisputeWatchController();
+    controller.arm("7");
+    stubFetch(async () => {
+      throw new Error("network down");
+    });
+
+    await controller.check();
+
+    expect(controller.answered).toBe(0);
+  });
+
+  it("answers at most once even if two ticks overlap", async () => {
+    const controller = new DisputeWatchController();
+    controller.arm("7");
+    stubFetch(async () => ({
+      ok: true,
+      json: async () => ({
+        session: { status: "GAME_SESSION_STATE_DISPUTED" },
+      }),
+    }));
+
+    await Promise.all([controller.check(), controller.check()]);
+
+    expect(controller.answered).toBe(1);
+  });
+
+  it("does not poll once the hand has stopped running", async () => {
+    const controller = new DisputeWatchController();
+    controller.arm("7");
+    controller.stop();
+    let called = false;
+    stubFetch(async () => {
+      called = true;
+      return {
+        ok: true,
+        json: async () => ({
+          session: { status: "GAME_SESSION_STATE_DISPUTED" },
+        }),
+      };
+    });
+
+    await controller.check();
+
+    expect(called).toBe(false);
+    expect(controller.answered).toBe(0);
+  });
+});

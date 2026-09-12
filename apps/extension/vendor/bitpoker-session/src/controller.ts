@@ -197,6 +197,22 @@ export class PokerGameController {
   // appends each opponent move exactly once.
   protected loggedPeerSeq = 0;
 
+  // Set once this seat has filed (or answered) a chain dispute, so the two
+  // trigger paths below (transport failure inside pump(), and the poll in
+  // checkForUnilateralDispute below) cannot both submit evidence for the same
+  // session.
+  protected disputeHandled = false;
+  // Ticks checkForUnilateralDispute while a chain session is live. A peer can
+  // submit real evidence to move the session to DISPUTED, then reveal its own
+  // secret, entirely on chain — the relay link keeps carrying frames normally,
+  // so nothing in pump()'s transport-failure path ever notices. Left
+  // unanswered, this seat is judged FORFEIT_NO_SUBMISSION for not revealing a
+  // secret nobody told it to reveal, and loses the whole escrow.
+  protected disputeWatchHandle?: ReturnType<typeof setInterval>;
+  // Guards against a slow LCD response overlapping the next tick.
+  protected disputeWatchBusy = false;
+  protected static readonly DISPUTE_WATCH_INTERVAL_MS = 15000;
+
   // On-chain session state (joinChain mode).
   protected chainSession?: any;
   // The intent this run opened, until it is matched. An intent left standing
@@ -668,7 +684,12 @@ export class PokerGameController {
       this.relay.sendSessionHello(this.sessionHello);
       this.emit({ message: "connected to relay, waiting for the opponent…" });
 
-      await this.pump();
+      this.startDisputeWatch();
+      try {
+        await this.pump();
+      } finally {
+        this.stopDisputeWatch();
+      }
     } catch (e: any) {
       // Anything that goes wrong before the match leaves an offer nobody is
       // going to play; take it off the table.
@@ -1146,23 +1167,124 @@ export class PokerGameController {
   // so the chain marks the session DISPUTED (protecting the escrow) and can
   // adjudicate the abandoned hand.
   protected async submitDispute(reason: string): Promise<void> {
+    if (this.disputeHandled) {
+      return;
+    }
+    this.disputeHandled = true;
     this.running = false;
+    this.stopDisputeWatch();
     if (this.relay) {
       this.relay.close();
     }
+    this.emit({
+      stage: "disputing",
+      message: `hand interrupted (${reason}) — submitting dispute evidence…`,
+    });
+    // ARBITRATION_REASON_CODE_CONNECTION_LOST = 6
+    await this.fileDisputeEvidenceAndSecret(6, "connection-lost", reason);
+  }
+
+  // Ticks every DISPUTE_WATCH_INTERVAL_MS for as long as pump() is running a
+  // chain session. Detects the case ONCHAIN_ROADMAP.md §13.5 calls out: the
+  // peer can submit its own real evidence to force this session to DISPUTED
+  // and then reveal its secret, entirely through chain transactions the relay
+  // link never touches — pump()'s transport-failure escalation only fires on
+  // silence or a closed socket, neither of which happens here, so a player who
+  // is not watching the chain plays on, never reveals a secret nobody told it
+  // to reveal, and is judged FORFEIT_NO_SUBMISSION for the whole escrow.
+  protected startDisputeWatch(): void {
+    if (!this.chainSession || this.disputeWatchHandle) {
+      return;
+    }
+    this.disputeWatchHandle = setInterval(() => {
+      void this.checkForUnilateralDispute();
+    }, PokerGameController.DISPUTE_WATCH_INTERVAL_MS);
+  }
+
+  protected stopDisputeWatch(): void {
+    if (this.disputeWatchHandle) {
+      clearInterval(this.disputeWatchHandle);
+      this.disputeWatchHandle = undefined;
+    }
+  }
+
+  protected async checkForUnilateralDispute(): Promise<void> {
+    if (
+      this.disputeHandled ||
+      this.disputeWatchBusy ||
+      !this.running ||
+      !this.chainSession
+    ) {
+      return;
+    }
+    this.disputeWatchBusy = true;
+    try {
+      const res = await fetch(
+        `${this.chainLcdUrl}/pokerchain/pokerchain/v1/sessions/${this.chainSession.session_id}`
+      );
+      if (!res.ok) {
+        return; // Transient LCD trouble: try again next tick.
+      }
+      const body = await res.json();
+      const status: string = body.session?.status ?? "";
+      if (/DISPUTED/.test(status) && !this.disputeHandled && this.running) {
+        await this.respondToUnilateralDispute();
+      }
+    } catch {
+      // Network hiccup: say nothing and let the next tick try again —
+      // escalating on a failed fetch would dispute a session that never
+      // actually moved to DISPUTED.
+    } finally {
+      this.disputeWatchBusy = false;
+    }
+  }
+
+  // The peer disputed this session on chain while the relay link was still
+  // carrying frames normally, so pump()'s own dispute path never triggered.
+  // File this seat's evidence and secret the same way a locally-detected
+  // dispute would, just without a torn transport to blame it on.
+  protected async respondToUnilateralDispute(): Promise<void> {
+    if (this.disputeHandled) {
+      return;
+    }
+    this.disputeHandled = true;
+    this.running = false;
+    this.stopDisputeWatch();
+    if (this.relay) {
+      this.relay.close();
+    }
+    this.emit({
+      stage: "disputing",
+      message:
+        "the opponent disputed this session on chain — submitting your " +
+        "evidence and session secret so you are not judged as having forfeited",
+    });
+    // ARBITRATION_REASON_CODE_UNSPECIFIED = 0: nothing went wrong on this
+    // seat's side; it is answering a dispute the peer opened, not raising one.
+    await this.fileDisputeEvidenceAndSecret(
+      0,
+      "peer-initiated-dispute",
+      "the peer moved this session to DISPUTED on chain while play was " +
+        "still continuing normally over the relay"
+    );
+  }
+
+  // Shared tail of both dispute paths above: build and sign this seat's
+  // evidence from the recorded transcript, submit it plus the per-hand
+  // secret, then confirm the chain actually reflects DISPUTED.
+  protected async fileDisputeEvidenceAndSecret(
+    reasonCode: number,
+    reasonLabel: string,
+    reasonDescription: string
+  ): Promise<void> {
     const session = this.chainSession;
     try {
-      this.emit({
-        stage: "disputing",
-        message: `hand interrupted (${reason}) — submitting dispute evidence…`,
-      });
       const evidence = await this.worker.buildDisputeEvidence({
         chainSessionId: String(session.session_id),
         submitter: this.chainAddress,
-        // ARBITRATION_REASON_CODE_CONNECTION_LOST = 6
-        reasonCode: 6,
-        reasonLabel: "connection-lost",
-        reasonDescription: reason,
+        reasonCode,
+        reasonLabel,
+        reasonDescription,
       });
       if (evidence.error) {
         throw new Error(evidence.error);
@@ -1178,7 +1300,7 @@ export class PokerGameController {
         evidenceHash: evidence.evidenceHash ?? "",
         payloadHex: evidence.payloadHex ?? "",
         signature: signed.signature,
-        reason: evidence.reason ?? "connection-lost",
+        reason: evidence.reason ?? reasonLabel,
       });
       if (evidenceTx.code !== 0) {
         throw new Error(`submit-session-evidence failed: ${evidenceTx.rawLog}`);
