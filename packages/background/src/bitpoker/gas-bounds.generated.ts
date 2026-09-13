@@ -29,7 +29,7 @@ export const DEFAULT_MSG_GAS = 300000;
 
 // MsgAdjudicateSession — measured against an adversarial state.
 // Scales with: total bytes of evidence_payload stored for the session.
-export const GAS_ADJUDICATE_SESSION_BASE = 1000000;
+export const GAS_ADJUDICATE_SESSION_BASE = 7444000;
 export const GAS_ADJUDICATE_SESSION_PER_BYTE = 12;
 export function adjudicateSessionBound(payloadBytes: number): number {
   if (!Number.isSafeInteger(payloadBytes) || payloadBytes < 0) {
