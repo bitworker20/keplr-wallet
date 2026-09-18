@@ -275,8 +275,9 @@ describe("relay frame types", () => {
 // The peer can force this session to DISPUTED and reveal its own secret
 // entirely through chain transactions the relay link never sees — pump()'s
 // escalation above only fires on a dead transport, so a player who is not
-// watching the chain would never answer and would be judged
-// FORFEIT_NO_SUBMISSION for the whole escrow (ONCHAIN_ROADMAP.md §13.5).
+// watching the chain would never answer, and would be the seat the verdict
+// blames and charges the dispute fee while the hand is rolled back
+// (ONCHAIN_ROADMAP.md §13.5; before ADR-013, the whole escrow).
 // These drive checkForUnilateralDispute directly against a stubbed `fetch`.
 class DisputeWatchController extends PokerGameController {
   answered = 0;

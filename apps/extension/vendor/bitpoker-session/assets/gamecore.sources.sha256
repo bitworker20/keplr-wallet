@@ -1,9 +1,9 @@
 # Which gamecore sources the committed gamecore.wasm was built from.
 # Written by tools/wasm-stamp.sh --write; verified by --check (make wasm-check).
-# artifact gamecore.wasm a64e6f68deaf78ab6b959673b43384fd13271e46523eb312ddd25dacc7c604f7
+# artifact gamecore.wasm b9e6d255ff87591efebe89ddd42232278067ff0edd1c59a590f14ab4fd8440f5
 0e28b87efdae618a66517f8655c49168c9c98725face9b1256cf46e53f2f65f0  bitpoker/include/common/game_message.hpp
 4343e2f0e927df4fec10d4ab0448e6ae3c19ddfd56750f6e523c23d56bae9198  bitpoker/include/common/game_message_types.hpp
-dc15fdc48724568c57f0d1eaed05c984ca68e702f5c57a3626ca4ac0b68c17eb  bitpoker/include/common/protocol_state.hpp
+252ed0d1d6eb462225e0ed814d3251b410169a11b4f87308efcd10ad37a7b479  bitpoker/include/common/protocol_state.hpp
 da08f55bf13fdce8bbcc5845592bc41d4c68cf140a6f4157ed6014047eb04a55  bitpoker/include/common/session_evidence_payload.hpp
 7d3ffac24ec1062ad29c26969bed7adb4f155b0154bf9d4abef0e8d55331042f  bitpoker/include/common/session_matchmaking.hpp
 cda0421e3236da735d0e0a782441d16d0cde8d0150c2f61e3b3c102e375cc53c  bitpoker/include/common/session_settlement.hpp

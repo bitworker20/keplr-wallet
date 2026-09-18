@@ -208,8 +208,9 @@ export class PokerGameController {
   // submit real evidence to move the session to DISPUTED, then reveal its own
   // secret, entirely on chain — the relay link keeps carrying frames normally,
   // so nothing in pump()'s transport-failure path ever notices. Left
-  // unanswered, this seat is judged FORFEIT_NO_SUBMISSION for not revealing a
-  // secret nobody told it to reveal, and loses the whole escrow.
+  // unanswered, this seat is named at fault — and fined the ADR-004 dispute fee
+  // — for not revealing a secret nobody told it to reveal, and the hand it may
+  // have been winning is rolled back (ADR-013) instead of played out.
   protected disputeWatchHandle?: ReturnType<typeof setInterval>;
   // Guards against a slow LCD response overlapping the next tick.
   protected disputeWatchBusy = false;
@@ -1232,7 +1233,10 @@ export class PokerGameController {
   // link never touches — pump()'s transport-failure escalation only fires on
   // silence or a closed socket, neither of which happens here, so a player who
   // is not watching the chain plays on, never reveals a secret nobody told it
-  // to reveal, and is judged FORFEIT_NO_SUBMISSION for the whole escrow.
+  // to reveal, and is the seat the verdict names at fault. Since ADR-013 that
+  // costs the dispute fee and the hand (rolled back) rather than the whole
+  // escrow, but it is still the wrong end of a dispute this seat could have
+  // answered.
   protected startDisputeWatch(): void {
     if (!this.chainSession || this.disputeWatchHandle) {
       return;
