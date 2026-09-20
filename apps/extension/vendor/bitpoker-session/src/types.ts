@@ -4,6 +4,10 @@ export interface HandEffect {
   frames: Uint8Array[];
   // 0=LocalAction (our turn), 1=PeerMessage, 2=Done
   wait: number;
+  // onPeerFrame only: did this frame move the PROTOCOL — a fresh peer message
+  // on the record? A replay, a resync request and a refused frame do not.
+  // Absent from a gamecore that predates the flag, which reads as "yes".
+  progressed?: boolean;
 }
 
 export interface MatchedResult {

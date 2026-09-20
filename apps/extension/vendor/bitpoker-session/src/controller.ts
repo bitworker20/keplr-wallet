@@ -42,6 +42,7 @@ import {
 import { SettlementReport, buildSettlementReport } from "./settlement-report";
 import {
   ACTION_TIMEOUT_MS,
+  MAX_LINK_RECOVERIES_PER_WAIT,
   PEER_SILENCE_MS,
   RESUME_ATTEMPTS,
   RESUME_CONFIRM_TIMEOUT_MS,
@@ -191,6 +192,12 @@ export class PokerGameController {
   protected reconnect?: (fromSequence: number) => Promise<RelayClient>;
   // Fires when the local player has sat on their turn for ACTION_TIMEOUT_MS.
   protected actionTimer?: ReturnType<typeof setTimeout>;
+  // Peer-silence bookkeeping for the message pump() is waiting on; all of it is
+  // reset by noteProgress().
+  protected progressDeadline = 0;
+  protected progressCount = 0;
+  protected silenceRecoveryUsed = false;
+  protected linkRecoveries = 0;
   // Set while the timeout fold is being submitted, so the status message it
   // emits on the way out does not look like the start of a fresh turn and arm
   // another clock.
@@ -716,6 +723,8 @@ export class PokerGameController {
       amount,
     });
     await this.applyEffect(await this.worker.onLocalAction(kind, amount));
+    // Our move is out: the peer's turn, and its budget, start here.
+    this.noteProgress();
     await this.refresh();
   }
 
@@ -734,27 +743,94 @@ export class PokerGameController {
     this.emit({ actionLog: log.slice(-MAX_ACTION_LOG) });
   }
 
+  // The protocol moved: a fresh peer message went on the record, or this seat
+  // sent its own move and the peer's turn starts from there. Only this restarts
+  // the peer-silence clock — see pump().
+  protected noteProgress(): void {
+    this.progressDeadline = Date.now() + PEER_SILENCE_MS;
+    this.progressCount += 1;
+    this.silenceRecoveryUsed = false;
+    this.linkRecoveries = 0;
+  }
+
   protected async pump(): Promise<void> {
+    // The silence budget bounds how long the PROTOCOL may stand still, not how
+    // long the socket may. It used to be handed afresh to every nextFrame(),
+    // and this loop goes back to reading after every frame of any kind — so a
+    // peer that owed a move and did not care to make it sent a chat line, a
+    // replay or a resync a little more often than the budget, and this seat
+    // waited for ever: never reconnected, never escalated, never filed. The
+    // escrow then sits until active_deadline_height, where the chain refunds
+    // BOTH stakes in full — every hand the staller had lost included, and
+    // without even the dispute fee. See GameSession::receiveMessage, which had
+    // the same hole and is closed the same way.
+    this.noteProgress();
     while (this.running && this.relay) {
-      // Hearing nothing for this long means the peer is gone, NOT that it is
-      // thinking: one budget covers both seats' action clocks plus grace, and
-      // the local seat's clock (syncActionTimer) is what keeps our own half of
-      // that promise. See session-timing.ts for the arithmetic.
-      const frame = await this.relay.nextFrame(PEER_SILENCE_MS);
+      // One budget covers both seats' action clocks plus grace, and the local
+      // seat's clock (syncActionTimer) is what keeps our own half of that
+      // promise. See session-timing.ts for the arithmetic.
+      const deadlineAtWait = this.progressDeadline;
+      const remaining = deadlineAtWait - Date.now();
+      const frame =
+        remaining > 0 ? await this.relay.nextFrame(remaining) : null;
       // finish() tears the link down from outside this loop, which wakes the
       // read with no frame; that is a finished hand, not a lost peer.
       if (this.snapshot.stage === "done" || !this.running) {
         return;
       }
       if (!frame) {
-        const reason = this.relay.closed
+        const closed = this.relay.closed;
+        if (!closed) {
+          // That wait was for a deadline that has since moved: the local
+          // player acted while we were in it (act()), and the peer's clock
+          // runs from there.
+          if (this.progressDeadline !== deadlineAtWait) {
+            continue;
+          }
+          // Our own turn: the peer owes nothing, and the local action clock
+          // is what bounds this.
+          if (this.snapshot.wait === 0) {
+            this.noteProgress();
+            continue;
+          }
+        }
+        const reason = closed
           ? "relay connection closed"
           : "the opponent has gone quiet";
         // A broken transport is not an abandoned session. Rebuild the link and
         // let the gamecore replay what was missed before spending the escrow
         // on a dispute — a dropped websocket is a normal event on a laptop lid
         // or a network handover.
-        if (await this.resumeTransport(reason)) {
+        //
+        // On what terms depends on which it was. A link that CLOSED is
+        // nobody's fault, so the time spent reopening it is not the peer's —
+        // but each rescue is another chance to be dropped again, so they are
+        // counted. A budget that ran out in SILENCE gets one rescue, because
+        // silence is also what a half-dead link looks like and the move may be
+        // sitting unreplayed on the other side; it buys a confirm window, not
+        // a budget. A peer that answers the resync has shown it is there, and
+        // one that is there and still has not moved has had its turn.
+        const mayRecover = closed
+          ? this.linkRecoveries < MAX_LINK_RECOVERIES_PER_WAIT
+          : !this.silenceRecoveryUsed;
+        const recoveryStarted = Date.now();
+        const progressBefore = this.progressCount;
+        if (mayRecover && (await this.resumeTransport(reason))) {
+          // Unless the answer WAS the missing move, in which case
+          // noteProgress() has already started a fresh budget.
+          if (this.progressCount === progressBefore) {
+            const now = Date.now();
+            if (closed) {
+              this.linkRecoveries += 1;
+              this.progressDeadline = Math.max(
+                this.progressDeadline + (now - recoveryStarted),
+                now + RESUME_CONFIRM_TIMEOUT_MS
+              );
+            } else {
+              this.silenceRecoveryUsed = true;
+              this.progressDeadline = now + RESUME_CONFIRM_TIMEOUT_MS;
+            }
+          }
           continue;
         }
         // On-chain session interrupted mid-hand: escalate to the chain dispute
@@ -810,7 +886,13 @@ export class PokerGameController {
       return true;
     }
     if (frame.type === RelayType.StreamData && this.matched) {
-      await this.applyEffect(await this.worker.onPeerFrame(frame.payload));
+      const effect = await this.worker.onPeerFrame(frame.payload);
+      // `false` only: a gamecore from before the flag says nothing, and is
+      // taken at its old word.
+      if (effect.progressed !== false) {
+        this.noteProgress();
+      }
+      await this.applyEffect(effect);
       await this.refresh();
       // Frame pacing: hold each rendered peer move on screen for a beat so
       // fast opponents (native robots settle a street in milliseconds) stay

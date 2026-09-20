@@ -58,6 +58,12 @@ export const RESUME_CONNECT_TIMEOUT_MS = 10_000;
 // might still succeed.
 export const RESUME_CONFIRM_TIMEOUT_MS = 15_000;
 
+// How many times one awaited message may be rescued from a link that CLOSED
+// (as opposed to one that went quiet, which gets a single rescue — see pump()).
+// Time spent reconnecting is not charged to the peer, which makes each rescue
+// free, and a peer that can get this seat dropped by the relay could otherwise
+// buy them without end. Matches native's kMaxLinkRecoveriesPerWait.
+export const MAX_LINK_RECOVERIES_PER_WAIT = 3;
 // How long to wait after the Nth failed attempt before the next one: linear,
 // counted from 1 (so 1s, 2s, 3s). The FIRST attempt is not delayed — the
 // common case is a relay that bounced and is already back — so a run of n

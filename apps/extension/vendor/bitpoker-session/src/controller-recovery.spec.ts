@@ -487,3 +487,149 @@ describe("a hand the gamecore ended", () => {
     expect(controller.stage).toBe("error");
   });
 });
+
+// The silence budget bounds how long the PROTOCOL may stand still, not how long
+// the socket may. These run pump() against a relay whose frames arrive on a fake
+// clock (Date.now is swapped by hand — no timer helpers, see the header), so
+// "150 seconds of nothing useful" costs no time at all.
+describe("peer silence is measured in protocol progress", () => {
+  const realNow = Date.now;
+  let now = 0;
+
+  beforeEach(() => {
+    now = 1_000_000;
+    (Date as any).now = () => now;
+  });
+  afterEach(() => {
+    (Date as any).now = realNow;
+  });
+
+  // A relay that delivers one frame every `gapMs`, honouring the timeout it is
+  // given: a frame due after the timeout is not delivered early.
+  const pacedRelay = (frames: RelayFrame[], gapMs: number): FakeRelay => {
+    let untilNext = gapMs;
+    const relay = fakeRelay();
+    relay.nextFrame = async (timeoutMs = 0): Promise<RelayFrame | null> => {
+      if (frames.length === 0 || untilNext > timeoutMs) {
+        untilNext -= Math.min(untilNext, timeoutMs);
+        now += timeoutMs;
+        return null;
+      }
+      now += untilNext;
+      untilNext = gapMs;
+      return frames.shift() ?? null;
+    };
+    return relay;
+  };
+
+  const stream = (): RelayFrame =>
+    ({
+      type: RelayType.StreamData,
+      payload: new Uint8Array([1]),
+    } as RelayFrame);
+  const chat = (): RelayFrame =>
+    ({
+      type: RelayType.ChatMessage,
+      payload: new Uint8Array([1]),
+    } as RelayFrame);
+
+  class PacedController extends TestController {
+    consumed = 0;
+
+    constructor(progressed: boolean) {
+      super();
+      (this as any).worker = {
+        async makeResyncFrame(): Promise<Uint8Array> {
+          return RESYNC;
+        },
+        onPeerFrame: async (): Promise<any> => {
+          this.consumed += 1;
+          return { frames: [], wait: 1, progressed };
+        },
+        async tableState(): Promise<any> {
+          return {};
+        },
+      };
+    }
+  }
+
+  it("is not restarted by frames that advance nothing", async () => {
+    // A replay of something already accepted, every 100s against a 150s budget.
+    const controller = new PacedController(false);
+    const frames = Array.from({ length: 10 }, stream);
+    controller.armMidHand(pacedRelay(frames, 100_000));
+    const started = now;
+
+    await controller.runPump();
+
+    expect(controller.disputed).toEqual(["the opponent has gone quiet"]);
+    // Escalated when the budget ran out, not when the peer ran out of frames.
+    expect(now - started).toBe(150_000);
+    expect(controller.consumed).toBe(1);
+  });
+
+  it("is not restarted by chat either", async () => {
+    const controller = new PacedController(false);
+    const frames = Array.from({ length: 10 }, chat);
+    controller.armMidHand(pacedRelay(frames, 100_000));
+    const started = now;
+
+    await controller.runPump();
+
+    expect(controller.disputed).toEqual(["the opponent has gone quiet"]);
+    expect(now - started).toBe(150_000);
+  });
+
+  it("is restarted by a fresh peer message", async () => {
+    // The same cadence, but each frame is a move: a slow game, not a stall.
+    const controller = new PacedController(true);
+    const frames = Array.from({ length: 5 }, stream);
+    controller.armMidHand(pacedRelay(frames, 100_000));
+    const started = now;
+
+    await controller.runPump();
+
+    expect(controller.consumed).toBe(5);
+    // Five moves 100s apart, then one full budget of real silence.
+    expect(now - started).toBe(5 * 100_000 + 150_000);
+    expect(controller.disputed).toEqual(["the opponent has gone quiet"]);
+  });
+
+  it("gives a silent budget one rescue, not a budget each", async () => {
+    // Every reconnect works and the peer answers the resync — and never moves.
+    // This used not to fail: it never returned.
+    const controller = new PacedController(false);
+    controller.armMidHand(pacedRelay([], 100_000), () =>
+      pacedRelay([stream()], 1_000)
+    );
+
+    await controller.runPump();
+
+    expect(controller.reconnectCalls.length).toBe(1);
+    expect(controller.disputed).toEqual(["the opponent has gone quiet"]);
+  });
+
+  it("counts rescues from a link that keeps closing", async () => {
+    // Each new link answers the resync and then closes: a seat being dropped
+    // by the relay over and over. Also used to never return.
+    const closingRelay = (): FakeRelay => {
+      const relay = pacedRelay([stream()], 1_000);
+      const paced = relay.nextFrame.bind(relay);
+      relay.nextFrame = async (timeoutMs?: number) => {
+        const frame = await paced(timeoutMs);
+        if (!frame) {
+          relay.closed = true;
+        }
+        return frame;
+      };
+      return relay;
+    };
+    const controller = new PacedController(false);
+    controller.armMidHand(closingRelay(), closingRelay);
+
+    await controller.runPump();
+
+    expect(controller.reconnectCalls.length).toBe(3);
+    expect(controller.disputed).toEqual(["relay connection closed"]);
+  });
+});
