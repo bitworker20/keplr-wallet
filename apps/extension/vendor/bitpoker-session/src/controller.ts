@@ -1462,6 +1462,24 @@ export class PokerGameController {
       if (evidence.error) {
         throw new Error(evidence.error);
       }
+      // Nothing was ever played on this seat: matched, but the peer never sent
+      // the opening frame. The chain rejects evidence with no history, so filing
+      // it here would fail the tx and strand the escrow behind a spurious error;
+      // and there is nothing to adjudicate anyway. Take the abort-refund path
+      // instead — withdraw the offer if it is still open, and end on a benign
+      // terminal that says the stake refunds (the recovery card drives the
+      // on-chain void once the session is voidable). Mirrors native's
+      // GameSession::submitSessionDispute empty-history guard.
+      if ((evidence.historyLen ?? 0) === 0) {
+        await this.withdrawOpenIntent();
+        this.emit({
+          stage: "done",
+          message:
+            "the opponent never played a move, so there is nothing to dispute — " +
+            "your stake refunds once the session can be voided (no dispute fee)",
+        });
+        return;
+      }
       // The evidence signing payload carries the bitpoker-session-evidence-v2
       // domain prefix, so the raw signer accepts it.
       const signed = await this.wallet.signPayload(

@@ -184,6 +184,9 @@ export class PokerWorkerClient {
     evidenceHash?: string;
     signingPayload?: string;
     reason?: string;
+    // 0 = nothing was played on this seat, so the chain would reject evidence
+    // with no history; the caller must take the abort-refund path instead.
+    historyLen?: number;
   }> {
     return this.call("buildDisputeEvidence", args);
   }

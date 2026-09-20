@@ -633,3 +633,106 @@ describe("peer silence is measured in protocol progress", () => {
     expect(controller.disputed).toEqual(["relay connection closed"]);
   });
 });
+
+// Matched, but the peer never sent a move: this seat has no transcript to file.
+// The chain rejects evidence with no history, so filing it would fail the tx and
+// leave the escrow behind a spurious error; there is also nothing to adjudicate.
+// The seat must take the abort-refund path instead — the same benign outcome the
+// native client reaches through GameSession::submitSessionDispute's empty-history
+// guard — never a dispute (and never its fee).
+class EmptyHistoryController extends PokerGameController {
+  evidenceSubmits = 0;
+  secretSubmits = 0;
+  cancelledIntents: string[] = [];
+
+  constructor() {
+    super(
+      () => {},
+      {
+        async signPayload(): Promise<any> {
+          return { signature: "sig" };
+        },
+        async submitEvidence(): Promise<any> {
+          return { code: 0, txHash: "e" };
+        },
+        async submitSecret(): Promise<any> {
+          return { code: 0, txHash: "s" };
+        },
+        async cancelIntent(_chainId: string, intentId: string): Promise<any> {
+          return { intentId };
+        },
+      } as any,
+      {
+        async buildDisputeEvidence(): Promise<any> {
+          // The gamecore reports an empty transcript.
+          return {
+            payloadHex: "",
+            evidenceHash: "",
+            signingPayload: "",
+            reason: "game-failed",
+            historyLen: 0,
+          };
+        },
+        async exportSessionSecret(): Promise<any> {
+          return { secretKey: new Uint8Array(), pubkey: new Uint8Array() };
+        },
+      } as any
+    );
+    // Count the wallet calls that must NOT happen.
+    const wallet = this.wallet as any;
+    const submitEvidence = wallet.submitEvidence.bind(wallet);
+    wallet.submitEvidence = async (...a: unknown[]) => {
+      this.evidenceSubmits += 1;
+      return submitEvidence(...a);
+    };
+    const submitSecret = wallet.submitSecret.bind(wallet);
+    wallet.submitSecret = async (...a: unknown[]) => {
+      this.secretSubmits += 1;
+      return submitSecret(...a);
+    };
+    const cancelIntent = wallet.cancelIntent.bind(wallet);
+    wallet.cancelIntent = async (chainId: string, intentId: string) => {
+      this.cancelledIntents.push(intentId);
+      return cancelIntent(chainId, intentId);
+    };
+  }
+
+  arm(openIntentId: string): void {
+    this.chainSession = { session_id: "7" };
+    this.chainAddress = "poker1me";
+    this.openIntentId = openIntentId;
+    this.myIntentId = openIntentId;
+  }
+
+  file(): Promise<void> {
+    return this.fileDisputeEvidenceAndSecret(
+      4,
+      "game-failed",
+      "nothing played"
+    );
+  }
+
+  get stage(): string {
+    return this.snapshot.stage;
+  }
+
+  get message(): string {
+    return this.snapshot.message ?? "";
+  }
+}
+
+describe("a dispute with nothing to file", () => {
+  it("refunds instead of filing evidence the chain would reject", async () => {
+    const controller = new EmptyHistoryController();
+    controller.arm("intent-9");
+
+    await controller.file();
+
+    expect(controller.evidenceSubmits).toBe(0);
+    expect(controller.secretSubmits).toBe(0);
+    // The offer is withdrawn and the session ends on a benign terminal.
+    expect(controller.cancelledIntents).toEqual(["intent-9"]);
+    expect(controller.stage).toBe("done");
+    expect(controller.message).toContain("refund");
+  });
+});
