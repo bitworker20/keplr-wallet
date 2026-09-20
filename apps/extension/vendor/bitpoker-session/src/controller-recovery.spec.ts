@@ -396,3 +396,94 @@ describe("unilateral dispute watch", () => {
     expect(controller.answered).toBe(0);
   });
 });
+
+// A hand the gamecore ended is not a hand the link ended, so nothing above
+// covers it: the relay is fine, the peer is there, and this seat has just
+// refused what the peer sent. finish() used to report "dispute path applies"
+// and stop — leaving the chain to hear only the opponent's account, from a
+// seat that then never revealed its secret and was named and fined for it.
+class FailedHandController extends PokerGameController {
+  filed: Array<{ code: number; label: string }> = [];
+
+  constructor(status: number) {
+    super(
+      () => {},
+      {} as any,
+      {
+        async status(): Promise<number> {
+          return status;
+        },
+        async tableState(): Promise<any> {
+          return {};
+        },
+      } as any
+    );
+  }
+
+  protected override async fileDisputeEvidenceAndSecret(
+    reasonCode: number,
+    reasonLabel: string
+  ): Promise<void> {
+    this.filed.push({ code: reasonCode, label: reasonLabel });
+  }
+
+  arm(onChain: boolean): void {
+    this.matched = { meFirst: true, betAmount: 1 };
+    this.chainSession = onChain ? { session_id: "7" } : undefined;
+    this.running = true;
+    this.snapshot = { stage: "playing", message: "", wait: 2 };
+  }
+
+  markDisputeHandled(): void {
+    this.disputeHandled = true;
+  }
+
+  runFinish(): Promise<void> {
+    return this.finish();
+  }
+
+  get stage(): string {
+    return this.snapshot.stage;
+  }
+}
+
+describe("a hand the gamecore ended", () => {
+  it("files evidence and the secret instead of walking away", async () => {
+    const controller = new FailedHandController(3);
+    controller.arm(true);
+
+    await controller.runFinish();
+
+    // GAME_LOGIC_ERROR, under the same label native files it with.
+    expect(controller.filed).toEqual([{ code: 4, label: "game-failed" }]);
+  });
+
+  it("says so when it was the peer's cryptography that failed", async () => {
+    const controller = new FailedHandController(2);
+    controller.arm(true);
+
+    await controller.runFinish();
+
+    expect(controller.filed).toEqual([{ code: 5, label: "game-failed" }]);
+  });
+
+  it("files once, even if a dispute was already answered", async () => {
+    const controller = new FailedHandController(3);
+    controller.arm(true);
+    controller.markDisputeHandled();
+
+    await controller.runFinish();
+
+    expect(controller.filed).toEqual([]);
+  });
+
+  it("has nothing to file off chain", async () => {
+    const controller = new FailedHandController(3);
+    controller.arm(false);
+
+    await controller.runFinish();
+
+    expect(controller.filed).toEqual([]);
+    expect(controller.stage).toBe("error");
+  });
+});

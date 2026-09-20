@@ -994,10 +994,24 @@ export class PokerGameController {
       this.relay.close();
     }
     if (status !== 1) {
+      // The hand died on something THIS SEAT refused — a shuffle that did not
+      // verify, an illegal action, a frame too big to be anything. Nothing
+      // about the link is broken, so pump()'s escalation never sees it, and
+      // this used to be where the browser walked away: "dispute path applies",
+      // and then nothing applied it. The opponent files its own evidence, this
+      // seat never reveals its secret, and the verdict names and fines it for
+      // a hand the OTHER side sabotaged — while the one message that convicts
+      // the opponent (now kept by the gamecore for exactly this) never reaches
+      // the chain. Native closes this in GameSession::startSession; session 121
+      // is what it looked like before it did.
+      if (this.chainSession && this.matched) {
+        await this.escalateFailedHand(status, table);
+        return;
+      }
       this.emit({
         stage: "error",
         table,
-        message: `hand ended abnormally (status ${status}) — dispute path applies`,
+        message: `hand ended abnormally (status ${status})`,
       });
       return;
     }
@@ -1224,6 +1238,38 @@ export class PokerGameController {
     });
     // ARBITRATION_REASON_CODE_CONNECTION_LOST = 6
     await this.fileDisputeEvidenceAndSecret(6, "connection-lost", reason);
+  }
+
+  // File for a hand the gamecore ended (see finish()). Same tail as the two
+  // paths around it; what differs is the reason, which is what a human reads
+  // first when asking why a session was escalated. The engine does not take
+  // anyone's word for it either way: it replays the transcript.
+  protected async escalateFailedHand(
+    status: number,
+    table?: TableState
+  ): Promise<void> {
+    if (this.disputeHandled) {
+      return;
+    }
+    this.disputeHandled = true;
+    this.stopDisputeWatch();
+    this.emit({
+      stage: "disputing",
+      table,
+      message:
+        "the opponent's message was refused — submitting dispute evidence…",
+    });
+    // gamecore status 2 = the peer's cryptographic material did not verify
+    // (ARBITRATION_REASON_CODE_CRYPTO_VERIFICATION_FAILED = 5); anything else
+    // that ends a hand is a rules/protocol refusal (GAME_LOGIC_ERROR = 4).
+    const crypto = status === 2;
+    await this.fileDisputeEvidenceAndSecret(
+      crypto ? 5 : 4,
+      "game-failed",
+      crypto
+        ? "a peer message failed cryptographic verification and was refused"
+        : "a peer message broke the rules of the hand and was refused"
+    );
   }
 
   // Ticks every DISPUTE_WATCH_INTERVAL_MS for as long as pump() is running a
