@@ -10,7 +10,7 @@
 // jest through the vendored copy, so it stays on plain fakes and never waits
 // on a real clock (the paths asserted here are the zero-delay ones).
 import { PokerGameController } from "./controller";
-import { RelayFrame, RelayType } from "./relay-client";
+import { RelayFrame, RelayStreamState, RelayType } from "./relay-client";
 
 interface FakeRelay {
   closed: boolean;
@@ -19,8 +19,10 @@ interface FakeRelay {
   close(): void;
   sendStream(frame: Uint8Array): void;
   sendSessionHello(frame: Uint8Array): void;
-  sentSequence: number;
-  continueSequenceFrom(sequence: number): void;
+  streamState: RelayStreamState;
+  restoreStreamState(state: RelayStreamState): void;
+  resumeRequests: number;
+  requestResume(): void;
 }
 
 // `frames` are returned in order before nextFrame falls back to onRead()+null
@@ -47,9 +49,13 @@ const fakeRelay = (
     this.sent.push(frame);
   },
   sendSessionHello(): void {},
-  sentSequence: 0,
-  continueSequenceFrom(sequence: number): void {
-    this.sentSequence = Math.max(this.sentSequence, sequence);
+  streamState: { sendSeq: 0, sentFrames: [], lastReceivedSeq: 0 },
+  restoreStreamState(state: RelayStreamState): void {
+    this.streamState = state;
+  },
+  resumeRequests: 0,
+  requestResume(): void {
+    this.resumeRequests++;
   },
 });
 
@@ -66,7 +72,7 @@ const fakeWorker = () =>
 class TestController extends PokerGameController {
   disputed: string[] = [];
   failed: string[] = [];
-  reconnectCalls: number[] = [];
+  reconnectCalls: (RelayStreamState | undefined)[] = [];
 
   constructor() {
     super(() => {}, {} as any, fakeWorker());
@@ -84,14 +90,17 @@ class TestController extends PokerGameController {
 
   // Drops the controller into the state pump() runs in: matched, playing, on
   // an on-chain session (the case where giving up costs money).
-  armMidHand(relay: FakeRelay, reconnect?: (from: number) => FakeRelay): void {
+  armMidHand(
+    relay: FakeRelay,
+    reconnect?: (from?: RelayStreamState) => FakeRelay
+  ): void {
     this.relay = relay as any;
     this.matched = { meFirst: true, betAmount: 1 };
     this.chainSession = { session_id: "7" };
     this.running = true;
     this.snapshot = { stage: "playing", message: "", wait: 1 };
     this.reconnect = reconnect
-      ? async (from: number) => {
+      ? async (from?: RelayStreamState) => {
           this.reconnectCalls.push(from);
           return reconnect(from) as any;
         }
@@ -140,7 +149,9 @@ describe("pump recovery", () => {
           },
         ]
       );
-      replacement.continueSequenceFrom(from);
+      if (from) {
+        replacement.restoreStreamState(from);
+      }
       return replacement;
     });
 
@@ -152,29 +163,39 @@ describe("pump recovery", () => {
     // The gamecore's resync frame is what makes the peer replay what we
     // missed; a reconnect without it leaves both sides waiting.
     expect(replacement?.sent).toEqual([RESYNC]);
+    // And the transport-level half: without it a native peer that missed a
+    // frame on the dead socket sees a gap and drops everything after it.
+    expect(replacement?.resumeRequests).toBe(1);
     expect(controller.liveRelay).toBe(replacement);
     // The broken socket is closed so nothing is left reading it.
     expect(dead.closed).toBe(true);
   });
 
-  it("carries the outbound stream sequence into the new connection", async () => {
+  it("carries the stream state into the new connection", async () => {
     const controller = new TestController();
     const dead = fakeRelay();
-    dead.sentSequence = 17;
+    const state: RelayStreamState = {
+      sendSeq: 17,
+      sentFrames: [{ seq: 17, payload: new Uint8Array([1]) }],
+      lastReceivedSeq: 9,
+    };
+    dead.streamState = state;
 
     controller.armMidHand(dead, (from) => {
       const relay = fakeRelay(() => controller.stop());
-      relay.continueSequenceFrom(from);
+      if (from) {
+        relay.restoreStreamState(from);
+      }
       return relay;
     });
 
     await controller.runPump();
 
-    // A native peer drops any stream frame numbered at or below what it has
-    // already seen, so a replacement connection that restarted at 1 would be
-    // ignored into a stall — and then disputed.
-    expect(controller.reconnectCalls).toEqual([17]);
-    expect(controller.liveRelay.sentSequence).toBe(17);
+    // A native peer accepts exactly the next stream number, so a replacement
+    // that restarted at 1 -- or could not retransmit what the dead socket never
+    // delivered -- would be ignored into a stall, and then disputed.
+    expect(controller.reconnectCalls).toEqual([state]);
+    expect(controller.liveRelay.streamState).toBe(state);
   });
 
   it("escalates when the session has no way to reconnect", async () => {

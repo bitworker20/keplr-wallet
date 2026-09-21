@@ -12,6 +12,7 @@ import {
   buildHelloSigningPayload,
   RelayClient,
   RelayFrame,
+  RelayStreamState,
   RelayType,
 } from "./relay-client";
 import {
@@ -189,7 +190,7 @@ export class PokerGameController {
   // Rebuilds the relay link after it drops, with fresh auth material where the
   // scheme needs it. Set once the first connect succeeds; undefined means this
   // session has no way back and a dropped link goes straight to escalation.
-  protected reconnect?: (fromSequence: number) => Promise<RelayClient>;
+  protected reconnect?: (from?: RelayStreamState) => Promise<RelayClient>;
   // Fires when the local player has sat on their turn for ACTION_TIMEOUT_MS.
   protected actionTimer?: ReturnType<typeof setTimeout>;
   // Peer-silence bookkeeping for the message pump() is waiting on; all of it is
@@ -353,9 +354,11 @@ export class PokerGameController {
 
       // The dev handshake carries no signed, time-bound material, so a
       // reconnect is the same call again.
-      const connect = async (fromSequence = 0): Promise<RelayClient> => {
+      const connect = async (from?: RelayStreamState): Promise<RelayClient> => {
         const relay = new RelayClient(opts.relayUrl);
-        relay.continueSequenceFrom(fromSequence);
+        if (from) {
+          relay.restoreStreamState(from);
+        }
         await relay.connect({
           playerName: opts.playerName,
           networkAddress: `keplr://${opts.playerName}`,
@@ -645,7 +648,7 @@ export class PokerGameController {
       // signed text, so they are fixed per connection and a reconnect has to
       // sign a fresh pair — the relay rejects a replayed hello. signPayload is
       // non-interactive on both bridges, so this never prompts mid-hand.
-      const connect = async (fromSequence = 0): Promise<RelayClient> => {
+      const connect = async (from?: RelayStreamState): Promise<RelayClient> => {
         const timestampMillis = Date.now();
         const nonce =
           Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -662,7 +665,9 @@ export class PokerGameController {
         const signed = await this.wallet.signPayload(opts.chainId, signText);
 
         const relay = new RelayClient(relayEndpoint, relaySubprotocols);
-        relay.continueSequenceFrom(fromSequence);
+        if (from) {
+          relay.restoreStreamState(from);
+        }
         await relay.connect({
           playerName: opts.playerName,
           networkAddress: address,
@@ -939,11 +944,12 @@ export class PokerGameController {
       return false;
     }
     for (let attempt = 1; attempt <= RESUME_ATTEMPTS; attempt++) {
-      // Where our outbound stream numbering has to pick up (see
-      // RelayClient.sentSequence): a peer that has already seen frames 1..n
-      // discards anything numbered below that. Re-read per attempt, since a
-      // half-successful attempt may have advanced it.
-      const fromSequence = this.relay?.sentSequence ?? 0;
+      // The stream numbering and the retained frames belong to the session,
+      // not to the socket (see RelayClient.streamState): the peer accepts
+      // exactly the next number, so the replacement has to carry on from here
+      // and be able to retransmit what the dead socket never delivered.
+      // Re-read per attempt, since a half-successful attempt may have moved it.
+      const from = this.relay?.streamState;
       this.emit({
         resuming: true,
         message: `${reason} — reconnecting (${attempt}/${RESUME_ATTEMPTS})…`,
@@ -957,13 +963,15 @@ export class PokerGameController {
         }
       }
       try {
-        const relay = await this.withConnectTimeout(
-          this.reconnect(fromSequence)
-        );
+        const relay = await this.withConnectTimeout(this.reconnect(from));
         // The old socket may still be half-open; the relay has already
         // superseded it, but our own reader must stop waiting on it.
         this.relay?.close();
         this.relay = relay;
+        // Transport first: each side retransmits what the other's stream is
+        // missing, in order. Then the game-level resync, which settles what
+        // the two HANDS disagree about.
+        relay.requestResume();
         relay.sendStream(await this.worker.makeResyncFrame());
         // The websocket reconnecting proves nothing about the PEER — the
         // relay answers a fresh connection whether or not the opponent's
