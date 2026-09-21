@@ -24,6 +24,10 @@ export const MAX_EVIDENCE_SUBMISSIONS = 2;
 export const MAX_STORED_EVIDENCE_BYTES =
   MAX_EVIDENCE_PAYLOAD_BYTES * MAX_EVIDENCE_SUBMISSIONS;
 
+// The most messages one evidence submission may carry; the keeper refuses a
+// longer history outright, whatever its size in bytes.
+export const MAX_EVIDENCE_MESSAGES = 512;
+
 // What a message with no entry of its own gets.
 export const DEFAULT_MSG_GAS = 300000;
 
